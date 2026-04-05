@@ -11,10 +11,12 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+  <!-- 載入 Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
   
-  <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+  <!-- 🌟 新增：支援框線與字體的專業 Excel 產出引擎 (替換掉舊的) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body class="bg-slate-50">
 
@@ -105,7 +107,11 @@
       }, [students]);
 
       const currentSemesterStudents = students.filter(s => s.semester === activeSemester);
-      const currentSemesterLogs = logs.filter(l => l.semester === activeSemester);
+      // 🌟 修改：限制 7 天內且最多顯示 20 筆
+      const currentSemesterLogs = logs
+        .filter(l => l.semester === activeSemester)
+        .filter(l => l.timeMs ? (Date.now() - l.timeMs <= 7 * 24 * 60 * 60 * 1000) : true)
+        .slice(0, 20);
 
       const handleLogin = (e) => {
         e.preventDefault();
@@ -135,8 +141,9 @@
         setPasswordForm({ old: '', new: '', confirm: '' });
       };
 
-      const addLog = (message, semester = activeSemester, department = auth.department) => {
-        db.collection("logs").add({ semester, timestamp: new Date().toLocaleString(), message, department, timeMs: Date.now() });
+      // 🌟 修改：加入 type 參數來標記「單獨異動」或「批次處理」
+      const addLog = (message, semester = activeSemester, department = auth.department, type = 'info') => {
+        db.collection("logs").add({ semester, timestamp: new Date().toLocaleString(), message, department, timeMs: Date.now(), type });
       };
 
       const getSeatNum = (val) => parseInt(val) || 999;
@@ -157,12 +164,14 @@
                 logMsg += `學生 ${formData.name} 從 ${editingStudent.grade}${editingStudent.className}班 ${editingStudent.seatNumber}號 異動至 ${formData.grade}${formData.className}班 ${formData.seatNumber}號。 `;
               }
               if (editingStudent.status !== formData.status) logMsg += `學籍狀態變更為「${formData.status}」。 `;
-              if (logMsg) { if (formData.transferDate) logMsg += `(生效日: ${formData.transferDate})`; addLog(logMsg); }
+              // 🌟 標記為單獨異動
+              if (logMsg) { if (formData.transferDate) logMsg += `(生效日: ${formData.transferDate})`; addLog(logMsg, activeSemester, auth.department, 'single'); }
               setIsModalOpen(false);
             }).catch(err => showAlert("更新失敗：" + err.message));
           } else {
             db.collection("students").add({ ...formData, semester: activeSemester }).then(() => {
-              addLog(`新增學生：${formData.name} 分發至 ${formData.grade}${formData.className}班，座號 ${formData.seatNumber}`);
+              // 🌟 標記為單獨異動
+              addLog(`新增學生：${formData.name} 分發至 ${formData.grade}${formData.className}班，座號 ${formData.seatNumber}`, activeSemester, auth.department, 'single');
               setIsModalOpen(false);
             }).catch(err => showAlert("新增失敗：" + err.message));
           }
@@ -172,7 +181,8 @@
       const handleDeleteStudent = (studentToDelete) => {
         showConfirm(`確定要刪除學生「${studentToDelete.name}」的資料嗎？`, () => {
           db.collection("students").doc(studentToDelete.docId).delete().then(() => {
-            addLog(`刪除紀錄：已將學生「${studentToDelete.name}」刪除。`);
+            // 🌟 標記為單獨異動
+            addLog(`刪除紀錄：已將學生「${studentToDelete.name}」刪除。`, activeSemester, auth.department, 'single');
             setIsModalOpen(false);
           });
         }, '警告：刪除確認');
@@ -209,9 +219,9 @@
              }
            });
            await batch.commit();
-           addLog(`成功建立新學期「${newSem}」，匯入 ${copyCount} 筆學生。`);
+           addLog(`成功建立新學期「${newSem}」，匯入 ${copyCount} 筆學生。`, newSem, '系統', 'system');
         } else {
-           addLog(`建立空白學期「${newSem}」。`);
+           addLog(`建立空白學期「${newSem}」。`, newSem, '系統', 'system');
         }
         setSemesters(prev => [newSem, ...prev]); setActiveSemester(newSem); setIsNewSemesterModalOpen(false);
         showAlert(`新學期「${newSem}」建立完成！`, '建立成功');
@@ -290,7 +300,7 @@
             if (addedCount > 0 || updatedCount > 0) {
                showConfirm(`🎉 成功解析 Excel 檔案！\n- 共讀取了 ${validSheetCount} 個班級分頁\n- 新增了 ${addedCount} 筆新資料\n- 更新了 ${updatedCount} 筆既有資料\n\n是否確認匯入並同步至雲端「${activeSemester}」？`, async () => {
                   await batch.commit(); 
-                  addLog(`批次匯入/更新 Excel 檔案：讀取 ${validSheetCount} 個分頁，新增 ${addedCount} 筆，更新 ${updatedCount} 筆資料。`);
+                  addLog(`批次匯入/更新 Excel 檔案：讀取 ${validSheetCount} 個分頁，新增 ${addedCount} 筆，更新 ${updatedCount} 筆資料。`, activeSemester, auth.department, 'bulk');
                   showAlert('雲端資料同步成功！', '匯入成功');
                }, '匯入確認');
             } else if (validSheetCount === 0) {
@@ -307,23 +317,16 @@
         reader.readAsArrayBuffer(file);
       };
 
-      const triggerDownload = (csvRows, filename) => {
-        const csvString = '\uFEFF' + csvRows.join('\n');
-        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.setAttribute('href', url);
-        link.setAttribute('download', filename);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+      // === 🌟 全新升級：支援完美格式與分頁的 Excel 產出引擎 ===
+      const getRocDateString = () => {
+        const today = new Date();
+        return `${today.getFullYear() - 1911}.${today.getMonth() + 1}.${today.getDate()}`;
       };
 
-      const exportGradeToCSV = (targetGrade) => {
+      const generateGradeAOA = (targetGrade) => {
         const classOrder = ['忠', '孝', '仁', '愛', '信', '義', '和', '平', '未編班'];
         const gradeStudents = students.filter(s => s.semester === activeSemester && s.grade === targetGrade);
-        if (gradeStudents.length === 0) return showAlert(`該年級在 ${activeSemester} 目前沒有學生資料`);
+        if (gradeStudents.length === 0) return null;
 
         const uniqueClasses = [...new Set(gradeStudents.map(s => s.className))].sort((a, b) => {
           let idxA = classOrder.indexOf(a); let idxB = classOrder.indexOf(b);
@@ -331,16 +334,20 @@
           return idxA - idxB;
         });
 
-        const maxRows = 45;
-        let csvRows = [];
-        let titleRow = [];
-        uniqueClasses.forEach(cls => { titleRow.push(`${targetGrade}${cls}`, '', '', '', ''); });
-        csvRows.push(titleRow.join(','));
+        const maxRows = 45; // 預設 45 號
+        let aoa = [];
 
+        // 1. 標題列
+        let titleRow = [];
+        uniqueClasses.forEach(cls => { titleRow.push(`${targetGrade}${cls}`, '', '', '', '', ''); });
+        aoa.push(titleRow);
+
+        // 2. 欄位列
         let headerRow = [];
         uniqueClasses.forEach(cls => { headerRow.push('編號', '學號', '姓名', '平時', '段考', ''); });
-        csvRows.push(headerRow.join(','));
+        aoa.push(headerRow);
 
+        // 3. 學生資料列
         for (let seat = 1; seat <= maxRows; seat++) {
           let rowData = [];
           uniqueClasses.forEach(cls => {
@@ -352,34 +359,170 @@
             }
             rowData.push(seat, idStr, nameStr, '', '', '');
           });
-          csvRows.push(rowData.join(','));
+          aoa.push(rowData);
         }
-        triggerDownload(csvRows, `${activeSemester}_${targetGrade}全年級_並排總表.csv`);
+
+        // 4. 表尾資訊
+        let footerRow = [];
+        uniqueClasses.forEach(cls => { footerRow.push('*代表女生', '', '', '', `${getRocDateString()}製`, ''); });
+        aoa.push(footerRow);
+
+        return { aoa, uniqueClasses };
       };
 
-      const exportWholeSchoolToCSV = () => {
-        const currentSemData = students.filter(s => s.semester === activeSemester);
-        if (currentSemData.length === 0) return showAlert(`目前 ${activeSemester} 沒有資料`);
-
-        const gradeOrder = ['國一', '國二', '國三', '高一', '高二', '高三'];
-        const classOrder = ['忠', '孝', '仁', '愛', '信', '義', '和', '平', '未編班'];
+      const applySheetStyle = (ws, aoa, uniqueClasses) => {
+        const borderStyle = { style: "thin", color: { rgb: "000000" } };
+        const baseStyle = { font: { name: "標楷體", sz: 12 }, alignment: { vertical: "center", horizontal: "center" } };
         
-        const sortedStudents = [...currentSemData].sort((a, b) => {
-          let gA = gradeOrder.indexOf(a.grade); let gB = gradeOrder.indexOf(b.grade);
-          if (gA !== gB) return gA - gB;
-          let cA = classOrder.indexOf(a.className); let cB = classOrder.indexOf(b.className);
-          if (cA !== cB) return cA - cB;
-          return getSeatNum(a.seatNumber) - getSeatNum(b.seatNumber);
+        const titleStyle = { ...baseStyle, font: { name: "標楷體", sz: 14, bold: true }, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+        const cellStyle = { ...baseStyle, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+        const footerStyle = { font: { name: "標楷體", sz: 10 }, alignment: { vertical: "center", horizontal: "right" } };
+
+        // 自動調整最適合的欄寬
+        let cols = [];
+        for (let i = 0; i < uniqueClasses.length; i++) {
+            cols.push({ wch: 5 });  // 編號寬度
+            cols.push({ wch: 9 });  // 學號寬度
+            cols.push({ wch: 11 }); // 姓名寬度
+            cols.push({ wch: 5 });  // 平時寬度
+            cols.push({ wch: 5 });  // 段考寬度
+            cols.push({ wch: 2 });  // 班級之間的分隔空白
+        }
+        ws['!cols'] = cols;
+
+        // 套用框線與標楷體字型
+        let merges = [];
+        for (let R = 0; R < aoa.length; R++) {
+            for (let C = 0; C < aoa[R].length; C++) {
+                const cellRef = XLSX.utils.encode_cell({ c: C, r: R });
+                if (!ws[cellRef]) ws[cellRef] = { v: aoa[R][C], t: "s" };
+
+                if ((C + 1) % 6 === 0) continue; // 分隔的空白欄不套用框線
+
+                if (R === 0) {
+                    ws[cellRef].s = titleStyle;
+                } else if (R === aoa.length - 1) {
+                    ws[cellRef].s = footerStyle;
+                } else {
+                    ws[cellRef].s = cellStyle;
+                }
+            }
+        }
+
+        // 設定合併儲存格 (讓標題置中、表尾靠右)
+        for (let i = 0; i < uniqueClasses.length; i++) {
+            const startCol = i * 6;
+            merges.push({ s: { r: 0, c: startCol }, e: { r: 0, c: startCol + 4 } }); // 合併最上方標題
+            merges.push({ s: { r: aoa.length - 1, c: startCol }, e: { r: aoa.length - 1, c: startCol + 2 } }); // 合併表尾左側
+            merges.push({ s: { r: aoa.length - 1, c: startCol + 3 }, e: { r: aoa.length - 1, c: startCol + 4 } }); // 合併表尾右側
+        }
+        ws['!merges'] = merges;
+      };
+
+      const exportGradeToExcel = (targetGrade) => {
+        const result = generateGradeAOA(targetGrade);
+        if (!result) return showAlert(`該年級在 ${activeSemester} 目前沒有學生資料`);
+        
+        const { aoa, uniqueClasses } = result;
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        applySheetStyle(ws, aoa, uniqueClasses);
+        
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, targetGrade);
+        XLSX.writeFile(wb, `${activeSemester}_${targetGrade}全年級_並排總表.xlsx`);
+      };
+
+      const exportWholeSchoolToExcel = () => {
+        const grades = ['國一', '國二', '國三', '高一', '高二', '高三'];
+        const wb = XLSX.utils.book_new();
+        let hasData = false;
+
+        grades.forEach(grade => {
+            const result = generateGradeAOA(grade);
+            if (result) {
+                hasData = true;
+                const { aoa, uniqueClasses } = result;
+                const ws = XLSX.utils.aoa_to_sheet(aoa);
+                applySheetStyle(ws, aoa, uniqueClasses);
+                XLSX.utils.book_append_sheet(wb, ws, grade); // 依照年級建立不同的分頁(Sheet)
+            }
         });
 
-        const headers = ['學年度學期', '年級', '班級', '座號', '學號', '姓名', '性別', '狀態', '異動日期'];
-        const csvRows = [headers.join(',')];
+        if (!hasData) return showAlert(`目前 ${activeSemester} 沒有任何學生資料`);
+        XLSX.writeFile(wb, `${activeSemester}_永年中學_全校並排分頁總表.xlsx`);
+      };
 
-        sortedStudents.forEach(s => {
-          csvRows.push(`${s.semester},${s.grade},${s.className},${s.seatNumber},${s.id || ''},${s.name},${s.gender},${s.status},${s.transferDate || ''}`);
-        });
+      // 🌟 新增：單獨班級匯出相關功能
+      const generateClassAOA = (targetGrade, targetClass) => {
+        const classStudents = students.filter(s => s.semester === activeSemester && s.grade === targetGrade && s.className === targetClass);
+        if (classStudents.length === 0) return null;
 
-        triggerDownload(csvRows, `${activeSemester}_永年中學_全校名單總表.csv`);
+        const maxRows = 45; 
+        let aoa = [];
+
+        // 1. 標題列
+        aoa.push([`${targetGrade}${targetClass}`, '', '', '', '']);
+
+        // 2. 欄位列
+        aoa.push(['編號', '學號', '姓名', '平時', '段考']);
+
+        // 3. 學生資料列
+        for (let seat = 1; seat <= maxRows; seat++) {
+          const student = classStudents.find(s => getSeatNum(s.seatNumber) === seat);
+          let idStr = '', nameStr = '';
+          if (student && student.status !== '轉出' && student.status !== '休學' && student.status !== '畢業') {
+            idStr = student.id;
+            nameStr = student.name + (student.gender === '女' ? '*' : '');
+          }
+          aoa.push([seat, idStr, nameStr, '', '']);
+        }
+
+        // 4. 表尾資訊
+        aoa.push(['*代表女生', '', '', `${getRocDateString()}製`, '']);
+
+        return aoa;
+      };
+
+      const applySingleClassSheetStyle = (ws, aoa) => {
+        const borderStyle = { style: "thin", color: { rgb: "000000" } };
+        const baseStyle = { font: { name: "標楷體", sz: 12 }, alignment: { vertical: "center", horizontal: "center" } };
+        
+        const titleStyle = { ...baseStyle, font: { name: "標楷體", sz: 14, bold: true }, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+        const cellStyle = { ...baseStyle, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+        const footerStyle = { font: { name: "標楷體", sz: 10 }, alignment: { vertical: "center", horizontal: "right" } };
+
+        // 設定單班的 5 個欄位寬度
+        ws['!cols'] = [{ wch: 6 }, { wch: 10 }, { wch: 12 }, { wch: 6 }, { wch: 6 }];
+
+        let merges = [];
+        for (let R = 0; R < aoa.length; R++) {
+            for (let C = 0; C < aoa[R].length; C++) {
+                const cellRef = XLSX.utils.encode_cell({ c: C, r: R });
+                if (!ws[cellRef]) ws[cellRef] = { v: aoa[R][C], t: "s" };
+
+                if (R === 0) ws[cellRef].s = titleStyle;
+                else if (R === aoa.length - 1) ws[cellRef].s = footerStyle;
+                else ws[cellRef].s = cellStyle;
+            }
+        }
+
+        // 合併標題與表尾
+        merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }); 
+        merges.push({ s: { r: aoa.length - 1, c: 0 }, e: { r: aoa.length - 1, c: 2 } }); 
+        merges.push({ s: { r: aoa.length - 1, c: 3 }, e: { r: aoa.length - 1, c: 4 } }); 
+        ws['!merges'] = merges;
+      };
+
+      const exportClassToExcel = () => {
+        const aoa = generateClassAOA(filterGrade, filterClass);
+        if (!aoa) return showAlert(`該班級 (${filterGrade}${filterClass}) 在 ${activeSemester} 目前沒有學生資料`);
+        
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        applySingleClassSheetStyle(ws, aoa);
+        
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, `${filterGrade}${filterClass}`);
+        XLSX.writeFile(wb, `${activeSemester}_${filterGrade}${filterClass}名單.xlsx`);
       };
 
       const GradeOptions = () => (
@@ -501,17 +644,17 @@
                 {activeTab === 'classList' && (
                   <div className="max-w-6xl mx-auto space-y-6">
                     <div className="bg-indigo-50 p-6 rounded-xl shadow-sm border border-indigo-100 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
-                      <div><h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2"><i className="fa-solid fa-download text-lg"></i>【{activeSemester}】名單批次產出</h3></div>
+                      <div><h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2"><i className="fa-solid fa-download text-lg"></i>【{activeSemester}】名單批次產出 (完美排版)</h3></div>
                       <div className="flex flex-wrap gap-2 items-center">
-                        <button onClick={() => exportGradeToCSV('國一')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">國一</button>
-                        <button onClick={() => exportGradeToCSV('國二')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">國二</button>
-                        <button onClick={() => exportGradeToCSV('國三')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">國三</button>
+                        <button onClick={() => exportGradeToExcel('國一')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">國一</button>
+                        <button onClick={() => exportGradeToExcel('國二')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">國二</button>
+                        <button onClick={() => exportGradeToExcel('國三')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">國三</button>
                         <div className="w-px h-6 bg-indigo-200 mx-1"></div>
-                        <button onClick={() => exportGradeToCSV('高一')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">高一</button>
-                        <button onClick={() => exportGradeToCSV('高二')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">高二</button>
-                        <button onClick={() => exportGradeToCSV('高三')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">高三</button>
+                        <button onClick={() => exportGradeToExcel('高一')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">高一</button>
+                        <button onClick={() => exportGradeToExcel('高二')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">高二</button>
+                        <button onClick={() => exportGradeToExcel('高三')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">高三</button>
                         <div className="w-px h-8 bg-indigo-200 mx-2"></div>
-                        <button onClick={exportWholeSchoolToCSV} className="bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-teal-700"><i className="fa-solid fa-file-excel"></i> 全校總表</button>
+                        <button onClick={exportWholeSchoolToExcel} className="bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-teal-700"><i className="fa-solid fa-file-excel"></i> 全校分頁總表</button>
                       </div>
                     </div>
 
@@ -521,6 +664,10 @@
                         <select className="border rounded-md px-3 py-2 bg-slate-50 outline-none" value={filterGrade} onChange={(e) => setFilterGrade(e.target.value)}><GradeOptions /></select>
                         <select className="border rounded-md px-3 py-2 bg-slate-50 outline-none" value={filterClass} onChange={(e) => setFilterClass(e.target.value)}><ClassOptions /></select>
                       </div>
+                      {/* 🌟 新增：單班獨立匯出按鈕 */}
+                      <button onClick={exportClassToExcel} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-blue-700 transition-colors shadow-sm">
+                        <i className="fa-solid fa-file-arrow-down"></i> 匯出此班級名單
+                      </button>
                     </div>
 
                     <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
@@ -606,15 +753,29 @@
                         <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><i className="fa-solid fa-clock-rotate-left text-xl text-blue-600"></i> 【{activeSemester}】系統異動廣播紀錄</h2>
                       </div>
                       <div className="space-y-4">
-                        {currentSemesterLogs.map(log => (
-                          <div key={log.id} className="flex items-start gap-4 p-4 border rounded-lg bg-slate-50 border-slate-200">
-                            <div className="bg-blue-100 p-2 rounded-full text-blue-600 mt-1"><i className="fa-solid fa-bell text-lg"></i></div>
-                            <div>
-                              <div className="flex items-center gap-2 mb-1"><span className="font-bold text-slate-800">{log.department} 通報</span><span className="text-xs text-slate-400">{log.timestamp}</span></div>
-                              <p className="text-slate-700">{log.message}</p>
+                        {currentSemesterLogs.map(log => {
+                          const isSingle = log.type === 'single';
+                          return (
+                            <div key={log.id || log.docId} className={`flex items-start gap-4 p-4 border rounded-lg ${isSingle ? 'bg-amber-50 border-amber-300 shadow-sm' : 'bg-slate-50 border-slate-200'}`}>
+                              <div className={`p-2 rounded-full mt-1 ${isSingle ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'}`}>
+                                <i className={`fa-solid ${isSingle ? 'fa-user-pen' : 'fa-bell'} text-lg`}></i>
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className={`font-bold ${isSingle ? 'text-amber-800' : 'text-slate-800'}`}>{log.department} 通報</span>
+                                  <span className="text-xs text-slate-400">{log.timestamp}</span>
+                                  {isSingle && <span className="bg-amber-500 text-white px-2 py-0.5 rounded text-[10px] font-bold shadow-sm">個別異動</span>}
+                                </div>
+                                <p className={isSingle ? 'text-amber-900 font-medium' : 'text-slate-700'}>{log.message}</p>
+                              </div>
                             </div>
+                          );
+                        })}
+                        {currentSemesterLogs.length === 0 && (
+                          <div className="text-center p-8 text-slate-400 border-2 border-dashed rounded-lg">
+                            最近 7 天內目前沒有任何異動通知紀錄
                           </div>
-                        ))}
+                        )}
                       </div>
                     </div>
                   </div>
