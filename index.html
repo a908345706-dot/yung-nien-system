@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>永年中學 學籍與名單管理系統</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
+</head>
+<body class="bg-slate-50">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // === 1. 初始化 Firebase 資料庫 (使用您的專屬金鑰) ===
+    const firebaseConfig = {
+      apiKey: "AIzaSyC5gnvuuFy7jhBcaeAGsRQ1EjaVshCQq3I",
+      authDomain: "yung-nien-system.firebaseapp.com",
+      projectId: "yung-nien-system",
+      storageBucket: "yung-nien-system.firebasestorage.app",
+      messagingSenderId: "29264956358",
+      appId: "1:29264956358:web:2fbcc58ed5d89bde9000c7"
+    };
+    
+    // 避免重複初始化
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.firestore();
+
+    function App() {
+      // === 系統帳號狀態 ===
+      const [appAccounts, setAppAccounts] = useState({
+        admin: { password: '123', role: 'admin', name: '註冊組長', department: '教務處 (管理員)' },
+        academic: { password: '123', role: 'staff', name: '教務處行政', department: '教務處' },
+        studentAffairs: { password: '123', role: 'staff', name: '學務處行政', department: '學務處' },
+        counseling: { password: '123', role: 'staff', name: '輔導室行政', department: '輔導室' },
+        generalAffairs: { password: '123', role: 'staff', name: '總務處行政', department: '總務處' }
+      });
+
+      const [auth, setAuth] = useState({ loggedIn: false, username: '', role: '', name: '', department: '' });
+      const [loginForm, setLoginForm] = useState({ username: 'admin', password: '' });
+
+      // === 狀態管理 ===
+      const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+      const [passwordForm, setPasswordForm] = useState({ old: '', new: '', confirm: '' });
+      const [dialog, setDialog] = useState({ isOpen: false, type: 'alert', title: '', message: '', onConfirm: null });
+
+      const showAlert = (message, title = '系統提示') => setDialog({ isOpen: true, type: 'alert', title, message, onConfirm: null });
+      const showConfirm = (message, onConfirm, title = '系統確認') => setDialog({ isOpen: true, type: 'confirm', title, message, onConfirm });
+      const closeDialog = () => setDialog({ ...dialog, isOpen: false });
+
+      const [semesters, setSemesters] = useState(['114-1', '113-2']);
+      const [activeSemester, setActiveSemester] = useState('114-1');
+      const [activeTab, setActiveTab] = useState('classList');
+      
+      // 改為從 Firebase 讀取的學生與日誌陣列
+      const [students, setStudents] = useState([]);
+      const [logs, setLogs] = useState([]);
+      const [isDataLoaded, setIsDataLoaded] = useState(false);
+
+      const [searchTerm, setSearchTerm] = useState('');
+      const [filterGrade, setFilterGrade] = useState('國一');
+      const [filterClass, setFilterClass] = useState('忠');
+      const [manageFilterGrade, setManageFilterGrade] = useState('國一');
+      const [manageFilterClass, setManageFilterClass] = useState('忠');
+
+      const [isModalOpen, setIsModalOpen] = useState(false);
+      const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+      const [isNewSemesterModalOpen, setIsNewSemesterModalOpen] = useState(false);
+      const [editingStudent, setEditingStudent] = useState(null);
+      const [formData, setFormData] = useState({ id: '', name: '', seatNumber: '1', gender: '男', grade: '國一', className: '忠', status: '在籍', transferDate: '' });
+      const [newSemesterData, setNewSemesterData] = useState({ name: '', copyOldData: true, promoteGrade: false, jhClassAssignment: 'keep', shClassAssignment: 'keep' });
+
+      // === 2. 即時監聽 Firebase 資料庫 ===
+      useEffect(() => {
+        if (!auth.loggedIn) return;
+
+        // 監聽學生名單
+        const unsubscribeStudents = db.collection("students").onSnapshot((snapshot) => {
+          const studentData = [];
+          snapshot.forEach((doc) => studentData.push({ ...doc.data(), docId: doc.id }));
+          setStudents(studentData);
+          setIsDataLoaded(true);
+        });
+
+        // 監聽異動日誌 (依照時間倒序)
+        const unsubscribeLogs = db.collection("logs").orderBy("timestamp", "desc").onSnapshot((snapshot) => {
+          const logData = [];
+          snapshot.forEach((doc) => logData.push({ ...doc.data(), docId: doc.id }));
+          setLogs(logData);
+        });
+
+        return () => {
+          unsubscribeStudents();
+          unsubscribeLogs();
+        };
+      }, [auth.loggedIn]);
+
+      // 動態更新學期選單 (抓取資料庫中所有出現過的學期)
+      useEffect(() => {
+        if (students.length > 0) {
+          const dbSemesters = [...new Set(students.map(s => s.semester))];
+          // 確保預設的 114-1, 113-2 存在
+          const combined = [...new Set([...dbSemesters, ...semesters])].sort().reverse();
+          setSemesters(combined);
+        }
+      }, [students]);
+
+      const handleLogin = (e) => {
+        e.preventDefault();
+        const account = appAccounts[loginForm.username];
+        if (account && account.password === loginForm.password) {
+          setAuth({ loggedIn: true, username: loginForm.username, role: account.role, name: account.name, department: account.department });
+          setActiveTab('classList');
+        } else {
+          showAlert('身分或密碼錯誤！請確認登入資訊是否正確。', '登入失敗');
+        }
+      };
+
+      const handleLogout = () => {
+        setAuth({ loggedIn: false, username: '', role: '', name: '', department: '' });
+        setLoginForm({ username: 'admin', password: '' });
+      };
+
+      const handleChangePassword = (e) => {
+        e.preventDefault();
+        if (passwordForm.old !== appAccounts[auth.username].password) return showAlert('舊密碼錯誤！請重新輸入。', '修改失敗');
+        if (passwordForm.new !== passwordForm.confirm) return showAlert('新密碼與確認密碼不一致！', '修改失敗');
+        if (passwordForm.new.length < 3) return showAlert('密碼長度過短，請至少輸入3個字元。', '修改失敗');
+        
+        setAppAccounts({ ...appAccounts, [auth.username]: { ...appAccounts[auth.username], password: passwordForm.new }});
+        showAlert('密碼修改成功！下次登入請使用新密碼。', '修改完成');
+        setIsPasswordModalOpen(false);
+        setPasswordForm({ old: '', new: '', confirm: '' });
+      };
+
+      // 寫入日誌到 Firebase
+      const addLog = (message, semester = activeSemester, department = auth.department) => {
+        db.collection("logs").add({
+          semester, timestamp: new Date().toLocaleString(), message, department, timeMs: Date.now()
+        });
+      };
+
+      const getSeatNum = (val) => parseInt(val) || 999;
+
+      const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        setFormData({ ...formData, [name]: value });
+      };
+
+      // === 3. 新增/修改資料到 Firebase ===
+      const handleSaveStudent = (e) => {
+        e.preventDefault();
+        const actionText = editingStudent ? '修改' : '新增';
+        
+        showConfirm(`即將${actionText}學生「${formData.name}」的資料，確定執行並發佈通知嗎？`, () => {
+          if (editingStudent) {
+            // 更新 Firebase
+            db.collection("students").doc(editingStudent.docId).update({
+              ...formData, semester: activeSemester
+            }).then(() => {
+              let logMsg = '';
+              if (editingStudent.grade !== formData.grade || editingStudent.className !== formData.className || editingStudent.seatNumber !== formData.seatNumber) {
+                logMsg += `學生 ${formData.name} (${formData.id || '無學號'}) 從 ${editingStudent.grade}${editingStudent.className}班 ${editingStudent.seatNumber}號 異動至 ${formData.grade}${formData.className}班 ${formData.seatNumber}號。 `;
+              }
+              if (editingStudent.status !== formData.status) logMsg += `學籍狀態由「${editingStudent.status}」變更為「${formData.status}」。 `;
+              if (logMsg) {
+                 if (formData.transferDate) logMsg += `(生效日: ${formData.transferDate})`;
+                 addLog(logMsg);
+              }
+              setIsModalOpen(false);
+            }).catch(err => showAlert("更新失敗：" + err.message));
+          } else {
+            // 新增至 Firebase
+            db.collection("students").add({
+              ...formData, semester: activeSemester
+            }).then(() => {
+              addLog(`新增學生：${formData.name} (${formData.id || '無學號'}) 分發至 ${formData.grade}${formData.className}班，座號 ${formData.seatNumber} ${formData.transferDate ? `(生效日: ${formData.transferDate})` : ''}`);
+              setIsModalOpen(false);
+            }).catch(err => showAlert("新增失敗：" + err.message));
+          }
+        }, '異動確認');
+      };
+
+      // === 4. 刪除 Firebase 資料 ===
+      const handleDeleteStudent = (studentToDelete) => {
+        showConfirm(`確定要刪除學生「${studentToDelete.name}」的資料嗎？\n\n此動作將從本學期 (${activeSemester}) 中完全移除該生紀錄，且無法復原！`, () => {
+          db.collection("students").doc(studentToDelete.docId).delete().then(() => {
+            addLog(`刪除紀錄：已將學生「${studentToDelete.name}」(${studentToDelete.id || '無學號'}) 從 ${activeSemester} 學期紀錄中刪除。`);
+            setIsModalOpen(false);
+          });
+        }, '警告：刪除確認');
+      };
+
+      const openEditModal = (student) => {
+        setEditingStudent(student);
+        setFormData({ ...student }); 
+        setIsModalOpen(true);
+      };
+
+      const openAddModal = () => {
+        setEditingStudent(null);
+        setFormData({ id: '', name: '', seatNumber: '1', gender: '男', grade: manageFilterGrade, className: manageFilterClass, status: '在籍', transferDate: new Date().toISOString().split('T')[0] });
+        setIsModalOpen(true);
+      };
+
+      // 跨學年批次建立到 Firebase (使用 Batch 寫入)
+      const handleCreateSemester = async (e) => {
+        e.preventDefault();
+        const newSem = newSemesterData.name.trim();
+        if (!newSem) return showAlert('請輸入學期名稱');
+        if (semesters.includes(newSem)) return showAlert('此學期名稱已存在！');
+
+        if (newSemesterData.copyOldData) {
+           const gradePromotionMap = { '國一': '國二', '國二': '國三', '國三': '畢業', '高一': '高二', '高二': '高三', '高三': '畢業' };
+           let studentsToCopy = students.filter(s => s.semester === activeSemester && s.status !== '轉出' && s.status !== '畢業');
+           
+           const batch = db.batch();
+           let copyCount = 0;
+
+           studentsToCopy.forEach(s => {
+             let newGrade = s.grade;
+             let newStatus = s.status;
+             let newClassName = s.className;
+             let newSeatNumber = s.seatNumber;
+
+             if (newSemesterData.promoteGrade) {
+                newGrade = gradePromotionMap[s.grade] || s.grade;
+                if (newGrade === '畢業') newStatus = '畢業';
+
+                const isJuniorHigh = newGrade.startsWith('國');
+                const isSeniorHigh = newGrade.startsWith('高');
+
+                if (newGrade !== '畢業') {
+                   if (isJuniorHigh && newSemesterData.jhClassAssignment === 'unassigned') { newClassName = '未編班'; newSeatNumber = ''; }
+                   if (isSeniorHigh && newSemesterData.shClassAssignment === 'unassigned') { newClassName = '未編班'; newSeatNumber = ''; }
+                }
+             }
+
+             if (newStatus !== '畢業') {
+                const newDocRef = db.collection("students").doc(); // 產生新ID
+                batch.set(newDocRef, { ...s, semester: newSem, grade: newGrade, className: newClassName, seatNumber: newSeatNumber, status: newStatus, transferDate: '' });
+                copyCount++;
+             }
+           });
+
+           await batch.commit();
+           
+           let msg = `已成功建立新學期「${newSem}」，自動匯入 ${copyCount} 筆在籍學生資料。`;
+           if (newSemesterData.promoteGrade) msg += ` (已升年級，畢業生已排除。)`;
+           addLog(msg, newSem, '系統');
+        } else {
+           addLog(`已建立全新空白學期「${newSem}」。`, newSem, '系統');
+        }
+
+        setSemesters(prev => [newSem, ...prev]);
+        setActiveSemester(newSem);
+        setIsNewSemesterModalOpen(false);
+        setNewSemesterData({ name: '', copyOldData: true, promoteGrade: false, jhClassAssignment: 'keep', shClassAssignment: 'keep' });
+        showAlert(`新學期「${newSem}」建立完成！已為您切換。`, '建立成功');
+      };
+
+      // 批次匯入並寫入 Firebase
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            const text = event.target.result;
+            const rows = text.split('\n').map(row => row.split(','));
+            if (rows.length < 3) return showAlert('檔案內容過少，格式不符');
+
+            const classHeaders = [];
+            rows[0].forEach((cell, index) => {
+              const cleanCell = cell.replace(/\s+/g, '');
+              const match = cleanCell.match(/(國|高)(一|二|三)(忠|孝|仁|愛|信|義|和|平)/);
+              if (match) classHeaders.push({ colIndex: index, grade: match[1] + match[2], className: match[3] });
+            });
+
+            if (classHeaders.length === 0) return showAlert('找不到班級標題 (如：國一忠)，請確認檔案格式相符。');
+
+            let updatedCount = 0;
+            let addedCount = 0;
+            const batch = db.batch();
+
+            for (let i = 2; i < rows.length; i++) {
+              const row = rows[i];
+              classHeaders.forEach(header => {
+                if (row.length > header.colIndex + 2) {
+                  const seatStr = row[header.colIndex];
+                  const idStr = row[header.colIndex + 1];
+                  const nameStr = row[header.colIndex + 2];
+
+                  if (seatStr && nameStr && seatStr.trim() !== '' && nameStr.trim() !== '') {
+                    const seatNumber = seatStr.replace('.0', '').trim();
+                    let id = idStr ? idStr.replace('.0', '').trim() : '';
+                    let name = nameStr.trim();
+                    let gender = '男';
+
+                    if (name.includes('*') || name.includes('◎')) {
+                      gender = '女';
+                      name = name.replace(/[*◎]/g, '');
+                    }
+
+                    // 比對目前 Firebase 中抓下來的資料
+                    const existingStudent = students.find(s => s.semester === activeSemester && ((id && s.id === id) || (!id && s.name === name && s.grade === header.grade)));
+
+                    if (existingStudent) {
+                       const docRef = db.collection("students").doc(existingStudent.docId);
+                       batch.update(docRef, { className: header.className, seatNumber: seatNumber, grade: header.grade, name: name, gender: gender });
+                       updatedCount++;
+                    } else {
+                       const newDocRef = db.collection("students").doc();
+                       batch.set(newDocRef, { semester: activeSemester, id: id, name: name, seatNumber: seatNumber, gender: gender, grade: header.grade, className: header.className, status: '在籍', transferDate: '' });
+                       addedCount++;
+                    }
+                  }
+                }
+              });
+            }
+
+            if (addedCount > 0 || updatedCount > 0) {
+               showConfirm(`成功解析檔案！\n- 新增了 ${addedCount} 筆新資料\n- 更新了 ${updatedCount} 筆既有資料\n\n是否確認匯入並同步至雲端「${activeSemester}」？`, async () => {
+                  await batch.commit(); // 執行 Firebase 批次寫入
+                  addLog(`批次匯入/更新 CSV 檔案：新增 ${addedCount} 筆，更新 ${updatedCount} 筆學生分班資料。`);
+                  showAlert('雲端資料同步成功！', '匯入成功');
+               }, '匯入確認');
+            } else {
+               showAlert('未能解析出任何學生資料，請檢查檔案內容。');
+            }
+          } catch (err) {
+            showAlert('解析檔案時發生錯誤，請確認檔案為 CSV 格式。' + err.message);
+          }
+          setIsImportModalOpen(false);
+          e.target.value = null; 
+        };
+        reader.readAsText(file, 'UTF-8');
+      };
+
+      const getRocDateString = () => {
+        const today = new Date();
+        return `${today.getFullYear() - 1911}.${today.getMonth() + 1}.${today.getDate()}`;
+      };
+
+      const triggerDownload = (csvRows, filename) => {
+        const csvString = '\uFEFF' + csvRows.join('\n');
+        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', filename);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+
+      const downloadSampleCSV = () => {
+        const sampleData = [
+          "高一忠,,,,,高一孝,,,,,",
+          "編號,學號,姓名,平時,段考,,編號,學號,姓名,平時,段考",
+          "1,411001,王大明,,, ,1,411036,李小華*,,,",
+          "2,411002,陳建宏,,, ,2,411037,林美美*,,"
+        ];
+        triggerDownload(sampleData, "批次匯入範例檔.csv");
+      };
+
+      const exportGradeToCSV = (targetGrade) => {
+        const classOrder = ['忠', '孝', '仁', '愛', '信', '義', '和', '平', '未編班'];
+        const gradeStudents = students.filter(s => s.semester === activeSemester && s.grade === targetGrade);
+        
+        if (gradeStudents.length === 0) return showAlert(`該年級在 ${activeSemester} 目前沒有學生資料`);
+
+        const uniqueClasses = [...new Set(gradeStudents.map(s => s.className))].sort((a, b) => {
+          let idxA = classOrder.indexOf(a); let idxB = classOrder.indexOf(b);
+          if (idxA === -1) idxA = 99; if (idxB === -1) idxB = 99;
+          return idxA - idxB;
+        });
+
+        const maxRows = 45;
+        let csvRows = [];
+
+        let titleRow = [];
+        uniqueClasses.forEach(cls => { titleRow.push(`${targetGrade}${cls}`, '', '', '', ''); });
+        csvRows.push(titleRow.join(','));
+
+        let headerRow = [];
+        uniqueClasses.forEach(cls => { headerRow.push('編號', '學號', '姓名', '平時', '段考', ''); });
+        csvRows.push(headerRow.join(','));
+
+        for (let seat = 1; seat <= maxRows; seat++) {
+          let rowData = [];
+          uniqueClasses.forEach(cls => {
+            const student = gradeStudents.find(s => s.className === cls && getSeatNum(s.seatNumber) === seat);
+            let idStr = '', nameStr = '';
+            if (student && student.status !== '轉出' && student.status !== '休學' && student.status !== '畢業') {
+              idStr = student.id;
+              nameStr = student.name + (student.gender === '女' ? '*' : '');
+            }
+            rowData.push(seat, idStr, nameStr, '', '', '');
+          });
+          csvRows.push(rowData.join(','));
+        }
+
+        let footerRow = [];
+        uniqueClasses.forEach(cls => { footerRow.push('*代表女生', '', '', '', `${getRocDateString()}製`, ''); });
+        csvRows.push(footerRow.join(','));
+
+        triggerDownload(csvRows, `${activeSemester}_${targetGrade}全年級_並排總表.csv`);
+      };
+
+      const exportWholeSchoolToCSV = () => {
+        const currentSemData = students.filter(s => s.semester === activeSemester);
+        if (currentSemData.length === 0) return showAlert(`目前 ${activeSemester} 沒有資料`);
+
+        const gradeOrder = ['國一', '國二', '國三', '高一', '高二', '高三'];
+        const classOrder = ['忠', '孝', '仁', '愛', '信', '義', '和', '平', '未編班'];
+        
+        const sortedStudents = [...currentSemData].sort((a, b) => {
+          let gA = gradeOrder.indexOf(a.grade); let gB = gradeOrder.indexOf(b.grade);
+          if (gA !== gB) return gA - gB;
+          let cA = classOrder.indexOf(a.className); let cB = classOrder.indexOf(b.className);
+          if (cA !== cB) return cA - cB;
+          return getSeatNum(a.seatNumber) - getSeatNum(b.seatNumber);
+        });
+
+        const headers = ['學年度學期', '年級', '班級', '座號', '學號', '姓名', '性別', '狀態', '異動日期'];
+        const csvRows = [headers.join(',')];
+
+        sortedStudents.forEach(s => {
+          if (s.status === '轉出' || s.status === '畢業') {
+            csvRows.push(`${s.semester},${s.grade},${s.className},${s.seatNumber},,,${s.gender},${s.status},${s.transferDate || ''}`);
+          } else {
+            csvRows.push(`${s.semester},${s.grade},${s.className},${s.seatNumber},${s.id},${s.name},${s.gender},${s.status},${s.transferDate || ''}`);
+          }
+        });
+
+        triggerDownload(csvRows, `${activeSemester}_永年中學_全校名單總表.csv`);
+      };
+
+      const GradeOptions = () => (
+        <React.Fragment>
+          <optgroup label="國中部">
+            <option value="國一">國一</option>
+            <option value="國二">國二</option>
+            <option value="國三">國三</option>
+          </optgroup>
+          <optgroup label="高中部">
+            <option value="高一">高一</option>
+            <option value="高二">高二</option>
+            <option value="高三">高三</option>
+          </optgroup>
+        </React.Fragment>
+      );
+
+      const ClassOptions = () => (
+        <React.Fragment>
+          <option value="忠">忠 班</option>
+          <option value="孝">孝 班</option>
+          <option value="仁">仁 班</option>
+          <option value="愛">愛 班</option>
+          <option value="信">信 班</option>
+          <option value="義">義 班</option>
+          <option value="和">和 班</option>
+          <option value="平">平 班</option>
+          <option value="未編班">未編班</option>
+        </React.Fragment>
+      );
+
+      return (
+        <React.Fragment>
+          {/* === 系統共用提示對話框 === */}
+          {dialog.isOpen && (
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+              <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                <div className={`px-6 py-4 flex items-center gap-2 ${dialog.type === 'confirm' ? 'bg-amber-500' : 'bg-blue-600'}`}>
+                  <i className={`fa-solid ${dialog.type === 'confirm' ? 'fa-circle-exclamation' : 'fa-circle-info'} text-white text-lg`}></i>
+                  <h3 className="text-white font-bold text-lg">{dialog.title}</h3>
+                </div>
+                <div className="p-6 text-slate-700 font-medium whitespace-pre-wrap leading-relaxed">
+                  {dialog.message}
+                </div>
+                <div className="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
+                  {dialog.type === 'confirm' && (
+                    <button onClick={closeDialog} className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-bold transition-colors">
+                      取消
+                    </button>
+                  )}
+                  <button onClick={() => {
+                    if (dialog.onConfirm) dialog.onConfirm();
+                    closeDialog();
+                  }} className={`px-4 py-2 text-white rounded-lg font-bold shadow-md transition-colors ${dialog.type === 'confirm' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                    {dialog.type === 'confirm' ? '確定執行' : '我知道了'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* --- 修改密碼 Modal (僅管理員可用) --- */}
+          {isPasswordModalOpen && auth.role === 'admin' && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+              <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                <div className="bg-slate-800 px-6 py-4 flex items-center gap-2">
+                  <i className="fa-solid fa-key text-white text-lg"></i>
+                  <h3 className="text-white font-bold text-lg">修改登入密碼</h3>
+                </div>
+                <form onSubmit={handleChangePassword} className="p-6 space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium text-slate-700">目前的舊密碼</label>
+                    <input required type="password" value={passwordForm.old} onChange={e => setPasswordForm({...passwordForm, old: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" placeholder="請輸入舊密碼" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium text-slate-700">新密碼</label>
+                    <input required type="password" value={passwordForm.new} onChange={e => setPasswordForm({...passwordForm, new: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" placeholder="請輸入新密碼 (至少3個字元)" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium text-slate-700">再次確認新密碼</label>
+                    <input required type="password" value={passwordForm.confirm} onChange={e => setPasswordForm({...passwordForm, confirm: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" placeholder="請再次輸入新密碼" />
+                  </div>
+                  <div className="pt-4 flex justify-end gap-3 border-t mt-6">
+                    <button type="button" onClick={() => { setIsPasswordModalOpen(false); setPasswordForm({ old: '', new: '', confirm: '' }); }} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium transition-colors">取消</button>
+                    <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-md transition-colors">
+                      確認修改
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* === 登入畫面 === */}
+          {!auth.loggedIn && (
+            <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+              <div className="bg-white max-w-md w-full rounded-2xl shadow-xl overflow-hidden">
+                <div className="bg-blue-600 p-8 text-center">
+                  <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
+                    <i className="fa-solid fa-users text-3xl text-white"></i>
+                  </div>
+                  <h1 className="text-2xl font-bold text-white mb-2">永年中學 學籍管理系統</h1>
+                  <p className="text-blue-100 text-sm flex items-center justify-center gap-1">
+                    <i className="fa-solid fa-cloud text-xs"></i> 雲端資料庫連線版
+                  </p>
+                </div>
+                <form onSubmit={handleLogin} className="p-8 space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-slate-700">登入身分</label>
+                    <select value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full border border-slate-300 rounded-lg px-4 py-3 bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500">
+                      <option value="admin">教務處 (管理員)</option>
+                      <option value="academic">教務處 (一般行政)</option>
+                      <option value="studentAffairs">學務處 (一般行政)</option>
+                      <option value="counseling">輔導室 (一般行政)</option>
+                      <option value="generalAffairs">總務處 (一般行政)</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-slate-700">登入密碼</label>
+                    <input type="password" required value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full border border-slate-300 rounded-lg px-4 py-3 bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" placeholder="測試密碼請輸入 123" />
+                  </div>
+                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-md transition-all flex justify-center items-center gap-2">
+                    <i className="fa-solid fa-lock text-lg"></i> 登入系統
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* === 主系統畫面 === */}
+          {auth.loggedIn && (
+            <div className="flex bg-slate-50 min-h-screen font-sans w-full">
+              
+              {/* 側邊導覽列 */}
+              <div className="w-64 bg-slate-800 text-white min-h-screen flex flex-col shadow-xl z-10">
+                <div className="p-6">
+                  <h1 className="text-xl font-bold mb-2 flex items-center gap-2">
+                    <i className="fa-solid fa-users text-xl text-blue-400"></i>
+                    永年中學系統
+                  </h1>
+                  <div className="text-xs text-slate-400 pb-4 border-b border-slate-700 flex flex-col gap-1">
+                    <span>目前登入：{auth.name}</span>
+                    <span className={`inline-block px-2 py-1 rounded text-white text-center mt-1 ${auth.role === 'admin' ? 'bg-emerald-600' : 'bg-slate-600'}`}>
+                      權限：{auth.role === 'admin' ? '管理員 (可修改)' : '一般行政 (讀取)'}
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="px-4 pb-4">
+                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <i className="fa-solid fa-calendar-days text-base"></i> 當前作業學期
+                  </label>
+                  <div className="flex gap-2 items-center">
+                    <select value={activeSemester} onChange={(e) => setActiveSemester(e.target.value)} className="flex-1 bg-slate-700 border border-slate-600 text-white rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500">
+                      {semesters.map(sem => (
+                        <option key={sem} value={sem}>{sem} 學期</option>
+                      ))}
+                    </select>
+                    {auth.role === 'admin' && (
+                      <button onClick={() => setIsNewSemesterModalOpen(true)} className="p-2 bg-slate-600 hover:bg-blue-600 rounded-lg text-white transition-colors" title="新增學期">
+                        <i className="fa-solid fa-plus text-lg"></i>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                <nav className="space-y-2 flex-1 px-4 mt-2 border-t border-slate-700 pt-4">
+                  <button onClick={() => setActiveTab('classList')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeTab === 'classList' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+                    <i className="fa-solid fa-file-excel text-lg"></i> 名單下載產出
+                  </button>
+                  {auth.role === 'admin' && (
+                    <button onClick={() => setActiveTab('manage')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeTab === 'manage' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+                      <i className="fa-solid fa-pen-to-square text-lg"></i> 學籍異動管理
+                    </button>
+                  )}
+                  <button onClick={() => setActiveTab('notifications')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeTab === 'notifications' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
+                    <i className="fa-solid fa-bell text-lg"></i> 處室通知紀錄
+                    {logs.filter(l => l.semester === activeSemester).length > 0 && (
+                      <span className="ml-auto bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                        {logs.filter(l => l.semester === activeSemester).length}
+                      </span>
+                    )}
+                  </button>
+                </nav>
+                
+                <div className="p-4 border-t border-slate-700 space-y-2">
+                  {auth.role === 'admin' && (
+                    <button onClick={() => setIsPasswordModalOpen(true)} className="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-white p-3 rounded-lg transition-colors font-medium">
+                      <i className="fa-solid fa-key text-lg"></i> 修改密碼
+                    </button>
+                  )}
+                  <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-red-600 text-white p-3 rounded-lg transition-colors font-medium">
+                    <i className="fa-solid fa-right-from-bracket text-lg"></i> 登出系統
+                  </button>
+                </div>
+              </div>
+              
+              <main className="flex-1 p-8 overflow-y-auto h-screen relative">
+                {/* 若資料還沒載入完畢顯示 Loading */}
+                {!isDataLoaded && (
+                  <div className="absolute inset-0 bg-slate-50/80 backdrop-blur-sm flex flex-col items-center justify-center z-20">
+                     <i className="fa-solid fa-circle-notch fa-spin text-4xl text-blue-600 mb-4"></i>
+                     <p className="text-slate-600 font-bold">雲端資料庫連線同步中...</p>
+                  </div>
+                )}
+
+                {/* === 班級名單產出 === */}
+                {activeTab === 'classList' && (
+                  <div className="max-w-6xl mx-auto space-y-6">
+                    <div className="bg-indigo-50 p-6 rounded-xl shadow-sm border border-indigo-100 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+                          <i className="fa-solid fa-download text-lg"></i>
+                          【{activeSemester}】名單批次產出
+                        </h3>
+                      </div>
+                      <div className="flex flex-wrap gap-2 items-center">
+                        <button onClick={() => exportGradeToCSV('國一')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">國一</button>
+                        <button onClick={() => exportGradeToCSV('國二')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">國二</button>
+                        <button onClick={() => exportGradeToCSV('國三')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">國三</button>
+                        <div className="w-px h-6 bg-indigo-200 mx-1"></div>
+                        <button onClick={() => exportGradeToCSV('高一')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">高一</button>
+                        <button onClick={() => exportGradeToCSV('高二')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">高二</button>
+                        <button onClick={() => exportGradeToCSV('高三')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">高三</button>
+                        <div className="w-px h-8 bg-indigo-200 mx-2"></div>
+                        <button onClick={exportWholeSchoolToCSV} className="bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-teal-700 transition-colors">
+                          <i className="fa-solid fa-file-excel"></i> 全校總表
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-100 mt-6">
+                      <div className="flex gap-4 items-center">
+                        <h2 className="text-2xl font-bold text-slate-800">單班線上檢視</h2>
+                        <select className="border rounded-md px-3 py-2 bg-slate-50 outline-none" value={filterGrade} onChange={(e) => setFilterGrade(e.target.value)}>
+                          <GradeOptions />
+                        </select>
+                        <select className="border rounded-md px-3 py-2 bg-slate-50 outline-none" value={filterClass} onChange={(e) => setFilterClass(e.target.value)}>
+                          <ClassOptions />
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-600 border-b border-slate-200">
+                            <th className="p-4 font-semibold w-24">座號</th>
+                            <th className="p-4 font-semibold">學號</th>
+                            <th className="p-4 font-semibold">姓名</th>
+                            <th className="p-4 font-semibold w-24">性別</th>
+                            <th className="p-4 font-semibold">狀態</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {currentSemesterStudents
+                            .filter(s => s.grade === filterGrade && s.className === filterClass)
+                            .sort((a, b) => getSeatNum(a.seatNumber) - getSeatNum(b.seatNumber))
+                            .map((student, index) => (
+                            <tr key={`${student.id || index}-${student.name}`} className="hover:bg-slate-50 transition-colors">
+                              <td className="p-4 text-slate-700 font-bold">{student.seatNumber}</td>
+                              <td className="p-4 text-slate-700 font-mono">{student.status === '轉出' || student.status === '畢業' ? '-' : (student.id || '無學號')}</td>
+                              <td className="p-4 text-slate-800 font-medium">
+                                {student.status === '轉出' || student.status === '畢業' ? '-' : student.name}
+                                {student.gender === '女' && student.status !== '轉出' && student.status !== '畢業' && <span className="text-pink-500 ml-1 font-bold">*</span>}
+                              </td>
+                              <td className="p-4 text-slate-600">{student.gender}</td>
+                              <td className="p-4">
+                                <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                  student.status === '在籍' ? 'bg-green-100 text-green-700' :
+                                  student.status === '休學' ? 'bg-amber-100 text-amber-700' :
+                                  student.status === '轉入' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                                }`}>{student.status}</span>
+                              </td>
+                            </tr>
+                          ))}
+                          {currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass).length === 0 && (
+                            <tr><td colSpan="5" className="p-8 text-center text-slate-500">此班級在 {activeSemester} 目前沒有學生資料，您可以點選「學籍管理」匯入資料。</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* === 學籍異動管理 === */}
+                {activeTab === 'manage' && auth.role === 'admin' && (
+                  <div className="max-w-6xl mx-auto space-y-6">
+                    <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                      <div className="flex gap-3 items-center">
+                        <select className="border rounded-lg px-3 py-2 bg-slate-50 outline-none font-medium text-slate-700" value={manageFilterGrade} onChange={(e) => setManageFilterGrade(e.target.value)}>
+                          <GradeOptions />
+                        </select>
+                        <select className="border rounded-lg px-3 py-2 bg-slate-50 outline-none font-medium text-slate-700" value={manageFilterClass} onChange={(e) => setManageFilterClass(e.target.value)}>
+                          <ClassOptions />
+                        </select>
+                        <div className="relative ml-2 w-48 xl:w-64">
+                          <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
+                          <input type="text" placeholder="班內搜尋..." className="pl-9 pr-4 py-2 border rounded-lg w-full outline-none bg-slate-50 text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button onClick={() => setIsImportModalOpen(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
+                          <i className="fa-solid fa-upload"></i> 匯入/更新 CSV 名單
+                        </button>
+                        <button onClick={openAddModal} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
+                          <i className="fa-solid fa-user-plus"></i> 新增轉入
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-600 border-b border-slate-200">
+                            <th className="p-4 font-semibold w-24">班級</th>
+                            <th className="p-4 font-semibold w-20 text-blue-700">座號</th>
+                            <th className="p-4 font-semibold">學號</th>
+                            <th className="p-4 font-semibold">姓名</th>
+                            <th className="p-4 font-semibold">狀態</th>
+                            <th className="p-4 font-semibold text-slate-500">異動紀錄 (日期)</th>
+                            <th className="p-4 font-semibold text-right">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {currentSemesterStudents
+                            .filter(s => s.grade === manageFilterGrade && s.className === manageFilterClass)
+                            .filter(s => s.name.includes(searchTerm) || (s.id && s.id.includes(searchTerm)))
+                            .sort((a,b) => getSeatNum(a.seatNumber) - getSeatNum(b.seatNumber))
+                            .map((student, index) => (
+                            <tr key={`${student.id || index}-${student.name}`} className="hover:bg-slate-50 transition-colors">
+                              <td className="p-4 text-slate-600 font-medium">{student.grade}{student.className}</td>
+                              <td className="p-4 text-blue-700 font-bold text-lg">{student.seatNumber}</td>
+                              <td className="p-4 text-slate-700 font-mono">{student.id || '無學號'}</td>
+                              <td className="p-4 text-slate-800 font-medium">{student.name} {student.gender === '女' && <span className="text-pink-500">*</span>}</td>
+                              <td className="p-4">
+                                <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                  student.status === '在籍' ? 'bg-green-100 text-green-700' : 
+                                  student.status === '轉入' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                                }`}>{student.status}</span>
+                              </td>
+                              <td className="p-4 text-slate-500 text-sm">
+                                {student.transferDate ? <span className="flex items-center gap-1"><i className="fa-solid fa-calendar-days text-xs"></i>{student.transferDate}</span> : '-'}
+                              </td>
+                              <td className="p-4 text-right">
+                                <button onClick={() => openEditModal(student)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg inline-flex items-center gap-1 text-sm font-medium mr-1">
+                                  <i className="fa-solid fa-pen-to-square"></i> 編輯
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          {currentSemesterStudents.filter(s => s.grade === manageFilterGrade && s.className === manageFilterClass).length === 0 && (
+                            <tr><td colSpan="7" className="p-8 text-center text-slate-500">此班級目前沒有符合的學生資料</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* === 處室通知紀錄 === */}
+                {activeTab === 'notifications' && (
+                  <div className="max-w-4xl mx-auto space-y-6">
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                      <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                          <i className="fa-solid fa-clock-rotate-left text-xl text-blue-600"></i> 【{activeSemester}】系統異動廣播紀錄
+                        </h2>
+                      </div>
+                      <div className="space-y-4">
+                        {currentSemesterLogs.map(log => (
+                          <div key={log.id} className="flex items-start gap-4 p-4 border rounded-lg bg-slate-50 border-slate-200">
+                            <div className="bg-blue-100 p-2 rounded-full text-blue-600 mt-1"><i className="fa-solid fa-bell text-lg"></i></div>
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="font-bold text-slate-800">{log.department} 通報</span>
+                                <span className="text-xs text-slate-400">{log.timestamp}</span>
+                              </div>
+                              <p className="text-slate-700">{log.message}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {currentSemesterLogs.length === 0 && (
+                          <div className="text-center p-8 text-slate-400 border-2 border-dashed rounded-lg">
+                            此學期目前沒有任何異動通知紀錄
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </main>
+
+              {/* === 所有系統專用 Modals === */}
+              {/* --- 新增學期 Modal --- */}
+              {isNewSemesterModalOpen && auth.role === 'admin' && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+                     <div className="bg-indigo-600 px-6 py-4 flex justify-between items-center">
+                      <h3 className="text-white font-bold text-lg flex items-center gap-2">
+                        <i className="fa-solid fa-calendar-days text-lg"></i> 建立新學期 (跨學年設定)
+                      </h3>
+                    </div>
+                    <form onSubmit={handleCreateSemester} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+                       <div className="space-y-1">
+                          <label className="text-sm font-medium text-slate-700">新學期名稱 (例如：114-2 或 115-1)</label>
+                          <input required type="text" value={newSemesterData.name} onChange={e => setNewSemesterData({...newSemesterData, name: e.target.value})} className="w-full border rounded-lg px-3 py-2 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="輸入學期名稱..." />
+                       </div>
+                       
+                       <div className="flex items-start gap-3 p-4 bg-indigo-50 border border-indigo-100 rounded-xl mt-4 cursor-pointer" onClick={() => setNewSemesterData({...newSemesterData, copyOldData: !newSemesterData.copyOldData})}>
+                          <input type="checkbox" checked={newSemesterData.copyOldData} readOnly className="mt-1 w-4 h-4 text-indigo-600 cursor-pointer" />
+                          <div>
+                             <p className="font-bold text-indigo-900 text-sm">自動匯入舊資料 (維持在籍名單)</p>
+                             <p className="text-indigo-700 text-xs mt-1">打勾後，系統會將前一學期 ({activeSemester}) 中所有「非轉出」的學生名單，自動建立到新學期中。</p>
+                          </div>
+                       </div>
+
+                       {newSemesterData.copyOldData && (
+                         <div className="flex flex-col gap-2 p-4 bg-purple-50 border border-purple-100 rounded-xl mt-2">
+                            <label className="flex items-start gap-3 cursor-pointer" onClick={(e) => { e.preventDefault(); setNewSemesterData({...newSemesterData, promoteGrade: !newSemesterData.promoteGrade}); }}>
+                              <input type="checkbox" checked={newSemesterData.promoteGrade} readOnly className="mt-1 w-4 h-4 text-purple-600 cursor-pointer" />
+                              <div>
+                                 <p className="font-bold text-purple-900 text-sm">學生自動升年級 (跨學年度使用)</p>
+                                 <p className="text-purple-700 text-xs mt-1">國一升國二、高一升高二等。<span className="font-bold text-red-600">國三與高三會視為畢業排除。</span></p>
+                              </div>
+                            </label>
+
+                            {newSemesterData.promoteGrade && (
+                              <div className="ml-7 mt-2 pt-2 border-t border-purple-200 space-y-4">
+                                 <div className="space-y-1">
+                                     <p className="text-xs font-bold text-purple-900 mb-1">▶ 國中部編班設定：</p>
+                                     <label className="flex items-center gap-2 cursor-pointer text-sm text-purple-800">
+                                        <input type="radio" name="jhClassAssignment" value="keep" checked={newSemesterData.jhClassAssignment === 'keep'} onChange={(e) => setNewSemesterData({...newSemesterData, jhClassAssignment: e.target.value})} className="text-purple-600" />
+                                        原班直升 (維持原本的班級與座號)
+                                     </label>
+                                     <label className="flex items-center gap-2 cursor-pointer text-sm text-purple-800">
+                                        <input type="radio" name="jhClassAssignment" value="unassigned" checked={newSemesterData.jhClassAssignment === 'unassigned'} onChange={(e) => setNewSemesterData({...newSemesterData, jhClassAssignment: e.target.value})} className="text-purple-600" />
+                                        重新編班 (設為「未編班」，稍後再匯入 Excel 更新)
+                                     </label>
+                                 </div>
+                                 
+                                 <div className="space-y-1 border-t border-purple-100 pt-3">
+                                     <p className="text-xs font-bold text-purple-900 mb-1">▶ 高中部編班設定：</p>
+                                     <label className="flex items-center gap-2 cursor-pointer text-sm text-purple-800">
+                                        <input type="radio" name="shClassAssignment" value="keep" checked={newSemesterData.shClassAssignment === 'keep'} onChange={(e) => setNewSemesterData({...newSemesterData, shClassAssignment: e.target.value})} className="text-purple-600" />
+                                        原班直升 (維持原本的班級與座號)
+                                     </label>
+                                     <label className="flex items-center gap-2 cursor-pointer text-sm text-purple-800">
+                                        <input type="radio" name="shClassAssignment" value="unassigned" checked={newSemesterData.shClassAssignment === 'unassigned'} onChange={(e) => setNewSemesterData({...newSemesterData, shClassAssignment: e.target.value})} className="text-purple-600" />
+                                        重新編班 (設為「未編班」，稍後再匯入 Excel 更新)
+                                     </label>
+                                 </div>
+                              </div>
+                            )}
+                         </div>
+                       )}
+
+                       <div className="pt-4 flex justify-end gap-3 border-t mt-6">
+                        <button type="button" onClick={() => { setIsNewSemesterModalOpen(false); setNewSemesterData({ name: '', copyOldData: true, promoteGrade: false, jhClassAssignment: 'keep', shClassAssignment: 'keep' }); }} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium">取消</button>
+                        <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-md flex items-center gap-2">
+                          <i className="fa-solid fa-circle-check"></i> 建立新學期
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {/* --- 匯入 CSV Modal --- */}
+              {isImportModalOpen && auth.role === 'admin' && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
+                    <div className="bg-emerald-600 px-6 py-4 flex justify-between items-center">
+                      <h3 className="text-white font-bold text-lg flex items-center gap-2">
+                        <i className="fa-solid fa-upload text-lg"></i> 批次匯入 / 更新 CSV 名單
+                      </h3>
+                    </div>
+                    <div className="p-6">
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6">
+                         <h4 className="font-bold text-slate-800 flex items-center gap-2 mb-2">
+                           <i className="fa-solid fa-circle-info text-lg text-blue-500"></i> Excel/CSV 檔案格式要求範例
+                         </h4>
+                         <p className="text-sm text-slate-600 mb-3">
+                           請確保上傳的檔案格式與本系統匯出之「並排總表」格式相符。<br/>
+                           系統會自動比對學生的「學號」，若發現該生已在本學期中，將會<strong className="text-blue-600">自動更新其班級與座號</strong>。
+                         </p>
+                         <div className="bg-white border border-slate-300 rounded overflow-x-auto text-sm">
+                           <table className="min-w-full text-left">
+                             <thead className="bg-slate-100 border-b border-slate-300">
+                               <tr>
+                                 <th className="p-2 font-bold text-indigo-700">高二忠</th>
+                                 <th className="p-2"></th><th className="p-2"></th><th className="p-2"></th><th className="p-2"></th>
+                                 <th className="p-2 border-l border-slate-300"></th>
+                                 <th className="p-2 font-bold text-indigo-700">高二孝</th>
+                                 <th className="p-2"></th><th className="p-2"></th><th className="p-2"></th><th className="p-2"></th>
+                               </tr>
+                             </thead>
+                             <tbody className="divide-y divide-slate-100 text-xs">
+                               <tr>
+                                 <td className="p-2 font-medium">編號</td><td className="p-2 font-medium">學號</td><td className="p-2 font-medium">姓名</td><td className="p-2">平時</td><td className="p-2">段考</td><td className="p-2 bg-slate-50 border-l border-slate-300"></td>
+                                 <td className="p-2 font-medium">編號</td><td className="p-2 font-medium">學號</td><td className="p-2 font-medium">姓名</td><td className="p-2">平時</td><td className="p-2">段考</td>
+                               </tr>
+                               <tr>
+                                 <td className="p-2">1</td><td className="p-2">411001</td><td className="p-2">吳彥萱*</td><td className="p-2"></td><td className="p-2"></td><td className="p-2 bg-slate-50 border-l border-slate-300"></td>
+                                 <td className="p-2">1</td><td className="p-2">411036</td><td className="p-2">李沐潔*</td><td className="p-2"></td><td className="p-2"></td>
+                               </tr>
+                             </tbody>
+                           </table>
+                         </div>
+                         <ul className="list-disc pl-5 mt-3 text-xs text-slate-500 space-y-1">
+                            <li>第一列必須包含班級標題 (例如：<span className="font-bold text-indigo-600">國一忠、高二孝</span>)。</li>
+                            <li>女生姓名後方若有標註 <span className="font-bold text-pink-500">* 或 ◎</span> 符號，系統會自動判定為女性並移除符號。</li>
+                            <li>若為 Excel 檔 (.xls/.xlsx)，請務必先點選「另存新檔」並選擇「CSV (逗號分隔) UTF-8」格式再上傳。</li>
+                         </ul>
+                         <div className="mt-4">
+                            <button type="button" onClick={downloadSampleCSV} className="flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg text-sm font-bold transition-colors">
+                              <i className="fa-solid fa-download"></i> 下載 CSV 匯入範例檔
+                            </button>
+                         </div>
+                      </div>
+
+                      <div className="border-2 border-dashed border-emerald-300 rounded-xl p-8 bg-emerald-50 hover:bg-emerald-100 transition-colors cursor-pointer relative text-center">
+                         <input type="file" accept=".csv" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleFileUpload} />
+                         <i className="fa-solid fa-file-excel text-5xl text-emerald-500 mx-auto mb-3 block"></i>
+                         <p className="text-emerald-800 font-bold mb-1 text-lg">點擊此處選擇 CSV 檔案</p>
+                         <p className="text-emerald-600 text-sm">自動執行新增名單或同步班級更新</p>
+                      </div>
+                      
+                      <div className="pt-4 flex justify-end gap-3 mt-4">
+                        <button type="button" onClick={() => setIsImportModalOpen(false)} className="px-6 py-2 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded-lg font-bold">關閉視窗</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* --- 編輯/新增 Modal --- */}
+              {isModalOpen && auth.role === 'admin' && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+                    <div className="bg-slate-800 px-6 py-4 flex justify-between items-center">
+                      <h3 className="text-white font-bold text-lg flex items-center gap-2">
+                        {editingStudent ? <i className="fa-solid fa-right-left text-lg"></i> : <i className="fa-solid fa-user-plus text-lg"></i>}
+                        {editingStudent ? '編輯 / 校內轉班' : '新增學生 (轉入)'}
+                      </h3>
+                    </div>
+                    <form onSubmit={handleSaveStudent} className="p-6 space-y-4">
+                      <div className="bg-slate-50 text-slate-700 text-sm p-3 rounded-lg border border-slate-200 flex flex-col gap-2">
+                         <div className="flex items-center justify-between">
+                           <span className="flex items-center gap-2 font-medium text-slate-800"><i className="fa-solid fa-calendar-days text-blue-500"></i> 當前學期：{activeSemester}</span>
+                           <div className="flex items-center gap-2 bg-white px-2 py-1 rounded border border-slate-300">
+                             <span className="text-xs text-slate-500">生效日期：</span>
+                             <input type="date" name="transferDate" value={formData.transferDate || ''} onChange={handleInputChange} className="text-xs outline-none bg-transparent text-slate-700 font-medium" />
+                           </div>
+                         </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-slate-700">學號</label>
+                          <input type="text" name="id" value={formData.id} onChange={handleInputChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="無學號可留空" />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-slate-700">姓名</label>
+                          <input required type="text" name="name" value={formData.name} onChange={handleInputChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-slate-700">性別</label>
+                          <select name="gender" value={formData.gender} onChange={handleInputChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
+                            <option value="男">男</option>
+                            <option value="女">女</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-slate-700">學籍狀態</label>
+                          <select name="status" value={formData.status} onChange={handleInputChange} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
+                            <option value="在籍">在籍 (一般 / 校內轉班)</option>
+                            <option value="轉入">轉入 (外校轉入)</option>
+                            <option value="轉出">轉出 (轉至外校)</option>
+                            <option value="休學">休學</option>
+                            <option value="畢業">畢業</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl space-y-3">
+                        <p className="text-xs font-bold text-blue-800 flex items-center gap-1">
+                          <i className="fa-solid fa-circle-info"></i> 班級與座號設定 (若要校內轉班，請直接修改)
+                        </p>
+                        <div className="grid grid-cols-3 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-blue-700">年級</label>
+                            <select name="grade" value={formData.grade} onChange={handleInputChange} className="w-full border border-blue-200 rounded-lg px-2 py-2 bg-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors text-sm">
+                               <GradeOptions />
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-blue-700">新班級</label>
+                            <select name="className" value={formData.className} onChange={handleInputChange} className="w-full border border-blue-200 rounded-lg px-2 py-2 bg-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors text-sm">
+                               <ClassOptions />
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-blue-700">新座號</label>
+                            <input type="text" name="seatNumber" value={formData.seatNumber} onChange={handleInputChange} className="w-full border border-blue-200 rounded-lg px-2 py-2 bg-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors text-sm" placeholder="例如: 1" />
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="pt-4 flex justify-between gap-3 border-t mt-6">
+                        <div>
+                          {editingStudent && (
+                            <button type="button" onClick={() => handleDeleteStudent(editingStudent)} className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium flex items-center gap-1 transition-colors">
+                              <i className="fa-solid fa-trash-can"></i> 刪除
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex gap-3">
+                          <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium transition-colors">取消</button>
+                          <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-md flex items-center gap-2 transition-colors">
+                            <i className="fa-solid fa-circle-check"></i> 確定儲存
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
+        </React.Fragment>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
