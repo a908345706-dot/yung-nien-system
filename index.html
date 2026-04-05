@@ -6,12 +6,9 @@
   <title>永年中學 學籍與名單管理系統</title>
   
   <script src="https://cdn.tailwindcss.com"></script>
-  
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
@@ -24,7 +21,7 @@
   <script type="text/babel">
     const { useState, useEffect } = React;
 
-    // === 1. 初始化 Firebase 資料庫 (使用您的專屬金鑰) ===
+    // === 初始化 Firebase 資料庫 ===
     const firebaseConfig = {
       apiKey: "AIzaSyC5gnvuuFy7jhBcaeAGsRQ1EjaVshCQq3I",
       authDomain: "yung-nien-system.firebaseapp.com",
@@ -34,14 +31,12 @@
       appId: "1:29264956358:web:2fbcc58ed5d89bde9000c7"
     };
     
-    // 避免重複初始化
     if (!firebase.apps.length) {
       firebase.initializeApp(firebaseConfig);
     }
     const db = firebase.firestore();
 
     function App() {
-      // === 系統帳號狀態 ===
       const [appAccounts, setAppAccounts] = useState({
         admin: { password: '123', role: 'admin', name: '註冊組長', department: '教務處 (管理員)' },
         academic: { password: '123', role: 'staff', name: '教務處行政', department: '教務處' },
@@ -53,7 +48,6 @@
       const [auth, setAuth] = useState({ loggedIn: false, username: '', role: '', name: '', department: '' });
       const [loginForm, setLoginForm] = useState({ username: 'admin', password: '' });
 
-      // === 狀態管理 ===
       const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
       const [passwordForm, setPasswordForm] = useState({ old: '', new: '', confirm: '' });
       const [dialog, setDialog] = useState({ isOpen: false, type: 'alert', title: '', message: '', onConfirm: null });
@@ -66,7 +60,6 @@
       const [activeSemester, setActiveSemester] = useState('114-1');
       const [activeTab, setActiveTab] = useState('classList');
       
-      // 改為從 Firebase 讀取的學生與日誌陣列
       const [students, setStudents] = useState([]);
       const [logs, setLogs] = useState([]);
       const [isDataLoaded, setIsDataLoaded] = useState(false);
@@ -84,11 +77,10 @@
       const [formData, setFormData] = useState({ id: '', name: '', seatNumber: '1', gender: '男', grade: '國一', className: '忠', status: '在籍', transferDate: '' });
       const [newSemesterData, setNewSemesterData] = useState({ name: '', copyOldData: true, promoteGrade: false, jhClassAssignment: 'keep', shClassAssignment: 'keep' });
 
-      // === 2. 即時監聽 Firebase 資料庫 ===
+      // === 監聽 Firebase 資料庫 ===
       useEffect(() => {
         if (!auth.loggedIn) return;
 
-        // 監聽學生名單
         const unsubscribeStudents = db.collection("students").onSnapshot((snapshot) => {
           const studentData = [];
           snapshot.forEach((doc) => studentData.push({ ...doc.data(), docId: doc.id }));
@@ -96,7 +88,6 @@
           setIsDataLoaded(true);
         });
 
-        // 監聽異動日誌 (依照時間倒序)
         const unsubscribeLogs = db.collection("logs").orderBy("timestamp", "desc").onSnapshot((snapshot) => {
           const logData = [];
           snapshot.forEach((doc) => logData.push({ ...doc.data(), docId: doc.id }));
@@ -109,15 +100,17 @@
         };
       }, [auth.loggedIn]);
 
-      // 動態更新學期選單 (抓取資料庫中所有出現過的學期)
       useEffect(() => {
         if (students.length > 0) {
           const dbSemesters = [...new Set(students.map(s => s.semester))];
-          // 確保預設的 114-1, 113-2 存在
           const combined = [...new Set([...dbSemesters, ...semesters])].sort().reverse();
           setSemesters(combined);
         }
       }, [students]);
+
+      // ✅ 就是這兩行漏掉了！現在補回來了
+      const currentSemesterStudents = students.filter(s => s.semester === activeSemester);
+      const currentSemesterLogs = logs.filter(l => l.semester === activeSemester);
 
       const handleLogin = (e) => {
         e.preventDefault();
@@ -147,7 +140,6 @@
         setPasswordForm({ old: '', new: '', confirm: '' });
       };
 
-      // 寫入日誌到 Firebase
       const addLog = (message, semester = activeSemester, department = auth.department) => {
         db.collection("logs").add({
           semester, timestamp: new Date().toLocaleString(), message, department, timeMs: Date.now()
@@ -161,14 +153,12 @@
         setFormData({ ...formData, [name]: value });
       };
 
-      // === 3. 新增/修改資料到 Firebase ===
       const handleSaveStudent = (e) => {
         e.preventDefault();
         const actionText = editingStudent ? '修改' : '新增';
         
         showConfirm(`即將${actionText}學生「${formData.name}」的資料，確定執行並發佈通知嗎？`, () => {
           if (editingStudent) {
-            // 更新 Firebase
             db.collection("students").doc(editingStudent.docId).update({
               ...formData, semester: activeSemester
             }).then(() => {
@@ -184,7 +174,6 @@
               setIsModalOpen(false);
             }).catch(err => showAlert("更新失敗：" + err.message));
           } else {
-            // 新增至 Firebase
             db.collection("students").add({
               ...formData, semester: activeSemester
             }).then(() => {
@@ -195,7 +184,6 @@
         }, '異動確認');
       };
 
-      // === 4. 刪除 Firebase 資料 ===
       const handleDeleteStudent = (studentToDelete) => {
         showConfirm(`確定要刪除學生「${studentToDelete.name}」的資料嗎？\n\n此動作將從本學期 (${activeSemester}) 中完全移除該生紀錄，且無法復原！`, () => {
           db.collection("students").doc(studentToDelete.docId).delete().then(() => {
@@ -217,7 +205,6 @@
         setIsModalOpen(true);
       };
 
-      // 跨學年批次建立到 Firebase (使用 Batch 寫入)
       const handleCreateSemester = async (e) => {
         e.preventDefault();
         const newSem = newSemesterData.name.trim();
@@ -251,7 +238,7 @@
              }
 
              if (newStatus !== '畢業') {
-                const newDocRef = db.collection("students").doc(); // 產生新ID
+                const newDocRef = db.collection("students").doc(); 
                 batch.set(newDocRef, { ...s, semester: newSem, grade: newGrade, className: newClassName, seatNumber: newSeatNumber, status: newStatus, transferDate: '' });
                 copyCount++;
              }
@@ -273,7 +260,6 @@
         showAlert(`新學期「${newSem}」建立完成！已為您切換。`, '建立成功');
       };
 
-      // 批次匯入並寫入 Firebase
       const handleFileUpload = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -317,7 +303,6 @@
                       name = name.replace(/[*◎]/g, '');
                     }
 
-                    // 比對目前 Firebase 中抓下來的資料
                     const existingStudent = students.find(s => s.semester === activeSemester && ((id && s.id === id) || (!id && s.name === name && s.grade === header.grade)));
 
                     if (existingStudent) {
@@ -336,7 +321,7 @@
 
             if (addedCount > 0 || updatedCount > 0) {
                showConfirm(`成功解析檔案！\n- 新增了 ${addedCount} 筆新資料\n- 更新了 ${updatedCount} 筆既有資料\n\n是否確認匯入並同步至雲端「${activeSemester}」？`, async () => {
-                  await batch.commit(); // 執行 Firebase 批次寫入
+                  await batch.commit(); 
                   addLog(`批次匯入/更新 CSV 檔案：新增 ${addedCount} 筆，更新 ${updatedCount} 筆學生分班資料。`);
                   showAlert('雲端資料同步成功！', '匯入成功');
                }, '匯入確認');
@@ -484,7 +469,6 @@
 
       return (
         <React.Fragment>
-          {/* === 系統共用提示對話框 === */}
           {dialog.isOpen && (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
               <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -512,7 +496,6 @@
             </div>
           )}
 
-          {/* --- 修改密碼 Modal (僅管理員可用) --- */}
           {isPasswordModalOpen && auth.role === 'admin' && (
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
               <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in duration-200">
@@ -544,7 +527,6 @@
             </div>
           )}
 
-          {/* === 登入畫面 === */}
           {!auth.loggedIn && (
             <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
               <div className="bg-white max-w-md w-full rounded-2xl shadow-xl overflow-hidden">
@@ -580,11 +562,9 @@
             </div>
           )}
 
-          {/* === 主系統畫面 === */}
           {auth.loggedIn && (
             <div className="flex bg-slate-50 min-h-screen font-sans w-full">
               
-              {/* 側邊導覽列 */}
               <div className="w-64 bg-slate-800 text-white min-h-screen flex flex-col shadow-xl z-10">
                 <div className="p-6">
                   <h1 className="text-xl font-bold mb-2 flex items-center gap-2">
@@ -628,9 +608,9 @@
                   )}
                   <button onClick={() => setActiveTab('notifications')} className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${activeTab === 'notifications' ? 'bg-blue-600' : 'hover:bg-slate-700'}`}>
                     <i className="fa-solid fa-bell text-lg"></i> 處室通知紀錄
-                    {logs.filter(l => l.semester === activeSemester).length > 0 && (
+                    {currentSemesterLogs.length > 0 && (
                       <span className="ml-auto bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
-                        {logs.filter(l => l.semester === activeSemester).length}
+                        {currentSemesterLogs.length}
                       </span>
                     )}
                   </button>
@@ -649,7 +629,6 @@
               </div>
               
               <main className="flex-1 p-8 overflow-y-auto h-screen relative">
-                {/* 若資料還沒載入完畢顯示 Loading */}
                 {!isDataLoaded && (
                   <div className="absolute inset-0 bg-slate-50/80 backdrop-blur-sm flex flex-col items-center justify-center z-20">
                      <i className="fa-solid fa-circle-notch fa-spin text-4xl text-blue-600 mb-4"></i>
@@ -657,7 +636,6 @@
                   </div>
                 )}
 
-                {/* === 班級名單產出 === */}
                 {activeTab === 'classList' && (
                   <div className="max-w-6xl mx-auto space-y-6">
                     <div className="bg-indigo-50 p-6 rounded-xl shadow-sm border border-indigo-100 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
@@ -736,7 +714,6 @@
                   </div>
                 )}
 
-                {/* === 學籍異動管理 === */}
                 {activeTab === 'manage' && auth.role === 'admin' && (
                   <div className="max-w-6xl mx-auto space-y-6">
                     <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-100">
@@ -812,7 +789,6 @@
                   </div>
                 )}
 
-                {/* === 處室通知紀錄 === */}
                 {activeTab === 'notifications' && (
                   <div className="max-w-4xl mx-auto space-y-6">
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
@@ -845,8 +821,6 @@
                 )}
               </main>
 
-              {/* === 所有系統專用 Modals === */}
-              {/* --- 新增學期 Modal --- */}
               {isNewSemesterModalOpen && auth.role === 'admin' && (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                   <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
@@ -920,7 +894,6 @@
                 </div>
               )}
 
-              {/* --- 匯入 CSV Modal --- */}
               {isImportModalOpen && auth.role === 'admin' && (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                   <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
@@ -988,7 +961,6 @@
                 </div>
               )}
 
-              {/* --- 編輯/新增 Modal --- */}
               {isModalOpen && auth.role === 'admin' && (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                   <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
