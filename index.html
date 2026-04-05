@@ -227,71 +227,76 @@
             const data = new Uint8Array(event.target.result);
             const workbook = XLSX.read(data, { type: 'array' });
             
-            const firstSheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[firstSheetName];
-            
-            const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
-
-            if (rows.length < 3) return showAlert('檔案內容過少或空白工作表');
-
-            const classHeaders = [];
-            rows[0].forEach((cell, index) => {
-              if (typeof cell === 'string') {
-                const cleanCell = cell.replace(/\s+/g, '');
-                const match = cleanCell.match(/(國|高)(一|二|三)(忠|孝|仁|愛|信|義|和|平)/);
-                if (match) classHeaders.push({ colIndex: index, grade: match[1] + match[2], className: match[3] });
-              }
-            });
-
-            if (classHeaders.length === 0) return showAlert('找不到班級標題 (如：高一忠)。請確認 Excel 檔案的最上面第一列有寫班級名稱。');
-
             let updatedCount = 0;
             let addedCount = 0;
             const batch = db.batch();
+            let validSheetCount = 0;
 
-            for (let i = 2; i < rows.length; i++) {
-              const row = rows[i];
-              classHeaders.forEach(header => {
-                if (row.length > header.colIndex + 2) {
-                  const seatStr = String(row[header.colIndex]);
-                  const idStr = String(row[header.colIndex + 1]);
-                  const nameStr = String(row[header.colIndex + 2]);
+            // 🌟 升級：自動尋找並處理「所有」工作表 (分頁)
+            workbook.SheetNames.forEach(sheetName => {
+              const worksheet = workbook.Sheets[sheetName];
+              const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
 
-                  if (seatStr && nameStr && seatStr.trim() !== '' && nameStr.trim() !== '') {
-                    const seatNumber = seatStr.replace('.0', '').trim();
-                    let id = (idStr && idStr !== 'undefined') ? idStr.replace('.0', '').trim() : '';
-                    let name = nameStr.trim();
-                    let gender = '男';
+              if (rows.length < 3) return; // 跳過沒有資料的空白分頁
 
-                    if (name.includes('*') || name.includes('◎')) {
-                      gender = '女';
-                      name = name.replace(/[*◎]/g, '');
-                    }
-
-                    const existingStudent = students.find(s => s.semester === activeSemester && ((id && s.id === id) || (!id && s.name === name && s.grade === header.grade)));
-
-                    if (existingStudent) {
-                       const docRef = db.collection("students").doc(existingStudent.docId);
-                       batch.update(docRef, { className: header.className, seatNumber: seatNumber, grade: header.grade, name: name, gender: gender });
-                       updatedCount++;
-                    } else {
-                       const newDocRef = db.collection("students").doc();
-                       batch.set(newDocRef, { semester: activeSemester, id: id, name: name, seatNumber: seatNumber, gender: gender, grade: header.grade, className: header.className, status: '在籍', transferDate: '' });
-                       addedCount++;
-                    }
-                  }
+              const classHeaders = [];
+              rows[0].forEach((cell, index) => {
+                if (typeof cell === 'string') {
+                  const cleanCell = cell.replace(/\s+/g, '');
+                  const match = cleanCell.match(/(國|高)(一|二|三)(忠|孝|仁|愛|信|義|和|平)/);
+                  if (match) classHeaders.push({ colIndex: index, grade: match[1] + match[2], className: match[3] });
                 }
               });
-            }
+
+              if (classHeaders.length === 0) return; // 找不到班級標題就跳過這個分頁
+              validSheetCount++;
+
+              for (let i = 2; i < rows.length; i++) {
+                const row = rows[i];
+                classHeaders.forEach(header => {
+                  if (row.length > header.colIndex + 2) {
+                    const seatStr = String(row[header.colIndex]);
+                    const idStr = String(row[header.colIndex + 1]);
+                    const nameStr = String(row[header.colIndex + 2]);
+
+                    if (seatStr && nameStr && seatStr.trim() !== '' && nameStr.trim() !== '') {
+                      const seatNumber = seatStr.replace('.0', '').trim();
+                      let id = (idStr && idStr !== 'undefined') ? idStr.replace('.0', '').trim() : '';
+                      let name = nameStr.trim();
+                      let gender = '男';
+
+                      if (name.includes('*') || name.includes('◎')) {
+                        gender = '女';
+                        name = name.replace(/[*◎]/g, '');
+                      }
+
+                      const existingStudent = students.find(s => s.semester === activeSemester && ((id && s.id === id) || (!id && s.name === name && s.grade === header.grade)));
+
+                      if (existingStudent) {
+                         const docRef = db.collection("students").doc(existingStudent.docId);
+                         batch.update(docRef, { className: header.className, seatNumber: seatNumber, grade: header.grade, name: name, gender: gender });
+                         updatedCount++;
+                      } else {
+                         const newDocRef = db.collection("students").doc();
+                         batch.set(newDocRef, { semester: activeSemester, id: id, name: name, seatNumber: seatNumber, gender: gender, grade: header.grade, className: header.className, status: '在籍', transferDate: '' });
+                         addedCount++;
+                      }
+                    }
+                  }
+                });
+              }
+            });
 
             if (addedCount > 0 || updatedCount > 0) {
-               showConfirm(`🎉 成功解析 Excel 檔案！\n- 新增了 ${addedCount} 筆新資料\n- 更新了 ${updatedCount} 筆既有資料\n\n是否確認匯入並同步至雲端「${activeSemester}」？`, async () => {
+               showConfirm(`🎉 成功解析 Excel 檔案！\n- 共讀取了 ${validSheetCount} 個班級分頁\n- 新增了 ${addedCount} 筆新資料\n- 更新了 ${updatedCount} 筆既有資料\n\n是否確認匯入並同步至雲端「${activeSemester}」？`, async () => {
                   await batch.commit(); 
-                  addLog(`批次匯入/更新 Excel 檔案：新增 ${addedCount} 筆，更新 ${updatedCount} 筆學生資料。`);
+                  addLog(`批次匯入/更新 Excel 檔案：讀取 ${validSheetCount} 個分頁，新增 ${addedCount} 筆，更新 ${updatedCount} 筆資料。`);
                   showAlert('雲端資料同步成功！', '匯入成功');
                }, '匯入確認');
+            } else if (validSheetCount === 0) {
+               showAlert('找不到班級標題 (如：高一忠)。請確認 Excel 檔案中至少有一個分頁的第一列有寫班級名稱。');
             } else {
-               showAlert('未能解析出任何學生資料，請檢查 Excel 內容。');
+               showAlert('未能解析出任何學生資料，請檢查 Excel 內容是否有填寫編號與姓名。');
             }
           } catch (err) {
             showAlert('解析檔案時發生錯誤：' + err.message);
@@ -691,24 +696,25 @@
                                <tr>
                                  <td className="p-2">1</td><td className="p-2">411001</td><td className="p-2">吳彥萱*</td><td className="p-2"></td><td className="p-2"></td><td className="p-2 bg-slate-50 border-l border-slate-300"></td>
                                  <td className="p-2">1</td><td className="p-2">411036</td><td className="p-2">李沐潔*</td><td className="p-2"></td><td className="p-2"></td>
-                               </tr>
-                             </tbody>
-                           </table>
-                         </div>
-                         <ul className="list-disc pl-5 mt-3 text-xs text-slate-500 space-y-1">
-                            <li>第一列必須包含班級標題 (例如：<span className="font-bold text-indigo-600">國一忠、高二孝</span>)。</li>
-                            <li>女生姓名後方若有標註 <span className="font-bold text-pink-500">* 或 ◎</span> 符號，系統會自動判定為女性並移除符號。</li>
-                         </ul>
-                      </div>
+                           </tr>
+                         </tbody>
+                       </table>
+                     </div>
+                     <ul className="list-disc pl-5 mt-3 text-xs text-slate-500 space-y-1">
+                        <li>支援單一分頁橫向並排多個班級，也支援<b>多個 Excel 分頁 (Sheets)</b> 同時匯入！</li>
+                        <li>第一列必須包含班級標題 (例如：<span className="font-bold text-indigo-600">國一忠、高二孝</span>)。</li>
+                        <li>女生姓名後方若有標註 <span className="font-bold text-pink-500">* 或 ◎</span> 符號，系統會自動判定為女性並移除符號。</li>
+                     </ul>
+                  </div>
 
-                      <div className="border-2 border-dashed border-emerald-300 rounded-xl p-8 bg-emerald-50 hover:bg-emerald-100 transition-colors cursor-pointer relative text-center">
-                         <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleFileUpload} />
-                         <i className="fa-solid fa-file-excel text-5xl text-emerald-500 mx-auto mb-3 block"></i>
-                         <p className="text-emerald-800 font-bold mb-1 text-lg">點擊此處選擇 Excel 或 CSV 檔案</p>
-                         <p className="text-emerald-600 text-sm">支援一般 Excel (.xlsx / .xls) 檔案，不需手動轉檔！</p>
-                      </div>
-                      
-                      <div className="pt-4 flex justify-end gap-3 mt-4">
+                  <div className="border-2 border-dashed border-emerald-300 rounded-xl p-8 bg-emerald-50 hover:bg-emerald-100 transition-colors cursor-pointer relative text-center">
+                     <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleFileUpload} />
+                     <i className="fa-solid fa-file-excel text-5xl text-emerald-500 mx-auto mb-3 block"></i>
+                     <p className="text-emerald-800 font-bold mb-1 text-lg">點擊此處選擇 Excel 或 CSV 檔案</p>
+                     <p className="text-emerald-600 text-sm">支援單檔包含「多個分頁 (Sheets)」一次匯入，不需拆檔！</p>
+                  </div>
+                  
+                  <div className="pt-4 flex justify-end gap-3 mt-4">
                         <button type="button" onClick={() => setIsImportModalOpen(false)} className="px-6 py-2 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded-lg font-bold">關閉視窗</button>
                       </div>
                     </div>
