@@ -98,14 +98,13 @@
       const [formData, setFormData] = useState({ id: '', name: '', seatNumber: '1', gender: '男', grade: '國一', className: '忠', status: '在籍', transferDate: '', originalClassSeat: '' });
       const [newSemesterData, setNewSemesterData] = useState({ name: '', copyOldData: true, promoteGrade: false, jhClassAssignment: 'keep', shClassAssignment: 'keep' });
 
-      // === 🌟 監聽 Firebase 雲端密碼資料庫 (獨立於登入狀態之外) ===
+      // === 監聽 Firebase 雲端密碼資料庫 ===
       useEffect(() => {
         const unsubscribeAccounts = db.collection("system").doc("accounts").onSnapshot((doc) => {
           if (doc.exists) {
             setAppAccounts(doc.data());
             localStorage.setItem('yungNienAccounts', JSON.stringify(doc.data()));
           } else {
-            // 如果雲端尚未建立帳號表，則初始化一份
             db.collection("system").doc("accounts").set(appAccounts);
           }
         });
@@ -168,7 +167,6 @@
          setIsPasswordModalOpen(true);
       };
 
-      // === 🌟 修改：將新密碼寫入雲端 ===
       const handleChangePassword = (e) => {
         e.preventDefault();
         const isChangingOther = auth.role === 'admin' && passwordForm.targetAccount !== auth.username;
@@ -186,7 +184,6 @@
           }
         };
 
-        // 寫入 Firebase 雲端
         db.collection("system").doc("accounts").set(updatedAccounts)
           .then(() => {
              setAppAccounts(updatedAccounts);
@@ -592,7 +589,7 @@
         applySheetStyle(ws, aoa, uniqueClasses);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, targetGrade);
-        XLSX.writeFile(wb, `${activeSemester}_${targetGrade}全年級_並排總表.xlsx`);
+        XLSX.writeFile(wb, `${activeSemester}_${targetGrade}全年級_並排總表_${getRocDateString()}.xlsx`);
       };
 
       const exportClassToExcel = (targetGrade, targetClass) => {
@@ -602,7 +599,7 @@
         applySingleClassSheetStyle(ws, aoa);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, `${targetGrade}${targetClass}`);
-        XLSX.writeFile(wb, `${activeSemester}_${targetGrade}${targetClass}名單.xlsx`);
+        XLSX.writeFile(wb, `${activeSemester}_${targetGrade}${targetClass}名單_${getRocDateString()}.xlsx`);
       };
 
       const exportWholeSchoolToExcel = () => {
@@ -620,7 +617,7 @@
             }
         });
         if (!hasData) return showAlert(`目前 ${activeSemester} 沒有任何學生資料`);
-        XLSX.writeFile(wb, `${activeSemester}_永年中學_全校並排分頁總表.xlsx`);
+        XLSX.writeFile(wb, `${activeSemester}_永年中學_全校並排分頁總表_${getRocDateString()}.xlsx`);
       };
 
       const exportStudentCountsToExcel = () => {
@@ -632,7 +629,7 @@
 
         let aoa = [];
         aoa.push([`永年中學 ${activeSemester}學期 班級人數統計表`, '', '', '', '']);
-        // 🌟 新增：加入製表日期
+        // 🌟 新增：加入製表日期於 Excel 內容中
         aoa.push([`製表日期：${getRocDateString()}`, '', '', '', '']);
         aoa.push(['年級', '班級', '總人數', '男生', '女生']);
 
@@ -688,7 +685,7 @@
         
         let merges = [];
         merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } });
-        // 🌟 新增：合併日期列
+        // 🌟 合併日期列
         merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: 4 } });
 
         for (let R = 0; R < aoa.length; R++) {
@@ -700,10 +697,10 @@
                 
                 if (R === 0) {
                     ws[cellRef].s = titleStyle;
-                } else if (R === 1) { // 🌟 套用日期專屬樣式
-                    ws[cellRef].s = dateStyle;
-                } else if (R === 2) { // 🌟 原本的表頭往下移了一列 (變成 R===2)
-                    ws[cellRef].s = headerStyle;
+                } else if (R === 1) { 
+                    ws[cellRef].s = dateStyle; // 日期列套用樣式
+                } else if (R === 2) { 
+                    ws[cellRef].s = headerStyle; // 表頭列 (往下移)
                 } else if (String(rowData).includes('總計')) {
                     if (String(rowData).includes('全校') || String(rowData).includes('部')) {
                        ws[cellRef].s = totalStyle;
@@ -725,7 +722,8 @@
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, '人數統計表');
-        XLSX.writeFile(wb, `${activeSemester}_永年中學_班級人數統計表.xlsx`);
+        // 🌟 修改：所有匯出的檔案名稱自動加上日期
+        XLSX.writeFile(wb, `${activeSemester}_永年中學_班級人數統計表_${getRocDateString()}.xlsx`);
       };
 
       const GradeOptions = () => (
