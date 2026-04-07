@@ -219,7 +219,7 @@
               const isStatusChanged = editingStudent.status !== formData.status;
 
               if (isClassChanged) {
-                logMsg += `【轉班異動】學生 ${formData.name} 由原本的 ${oldClass} 轉入 ${newClass} (新座號: ${formData.seatNumber}號)。 `;
+                logMsg += `【轉班異動】學生 ${formData.name} 由原本的 ${editingStudent.grade}${editingStudent.className}${editingStudent.seatNumber} 轉到 ${formData.grade}${formData.className} (新座號: ${formData.seatNumber}號)。 `;
               } else if (isSeatChanged) {
                 logMsg += `【座號異動】學生 ${formData.name} (${newClass}) 座號由 ${editingStudent.seatNumber}號 改為 ${formData.seatNumber}號。 `;
               }
