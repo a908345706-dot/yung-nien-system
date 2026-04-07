@@ -261,7 +261,7 @@
 
         if (newSemesterData.copyOldData) {
            const gradePromotionMap = { '國一': '國二', '國二': '國三', '國三': '畢業', '高一': '高二', '高二': '高三', '高三': '畢業' };
-           let studentsToCopy = students.filter(s => s.semester === activeSemester && s.status !== '轉出' && s.status !== '畢業' && s.status !== '放棄學籍');
+           let studentsToCopy = students.filter(s => s.semester === activeSemester && !['轉出', '畢業', '放棄學籍'].includes(s.status));
            const batch = db.batch(); let copyCount = 0;
 
            studentsToCopy.forEach(s => {
@@ -411,7 +411,7 @@
           uniqueClasses.forEach(cls => {
             const student = gradeStudents.find(s => s.className === cls && getSeatNum(s.seatNumber) === seat);
             let idStr = '', nameStr = '';
-            if (student && student.status !== '轉出' && student.status !== '休學' && student.status !== '畢業' && student.status !== '放棄學籍') {
+            if (student && !['轉出', '休學', '畢業', '放棄學籍'].includes(student.status)) {
               idStr = student.id;
               nameStr = student.name + (student.gender === '女' ? '*' : '');
             }
@@ -483,7 +483,7 @@
         for (let seat = 1; seat <= maxRows; seat++) {
           const student = classStudents.find(s => getSeatNum(s.seatNumber) === seat);
           let idStr = '', nameStr = '';
-          if (student && student.status !== '轉出' && student.status !== '休學' && student.status !== '畢業' && student.status !== '放棄學籍') {
+          if (student && !['轉出', '休學', '畢業', '放棄學籍'].includes(student.status)) {
             idStr = student.id;
             nameStr = student.name + (student.gender === '女' ? '*' : '');
           }
@@ -561,6 +561,105 @@
         });
         if (!hasData) return showAlert(`目前 ${activeSemester} 沒有任何學生資料`);
         XLSX.writeFile(wb, `${activeSemester}_永年中學_全校並排分頁總表.xlsx`);
+      };
+
+      // 🌟 新增：產出人數統計表邏輯
+      const exportStudentCountsToExcel = () => {
+        const activeSchoolStudents = students.filter(s => s.semester === activeSemester && !['轉出', '畢業', '放棄學籍'].includes(s.status));
+        if (activeSchoolStudents.length === 0) return showAlert(`目前 ${activeSemester} 沒有任何學生資料`);
+
+        const grades = ['國一', '國二', '國三', '高一', '高二', '高三'];
+        const classOrder = ['忠', '孝', '仁', '愛', '信', '義', '和', '平', '未編班'];
+
+        let aoa = [];
+        aoa.push([`永年中學 ${activeSemester}學期 班級人數統計表`, '', '', '', '']);
+        aoa.push(['年級', '班級', '總人數', '男生', '女生']);
+
+        let jhTotal = 0, jhMale = 0, jhFemale = 0;
+        let shTotal = 0, shMale = 0, shFemale = 0;
+
+        grades.forEach(grade => {
+            let gradeTotal = 0, gradeMale = 0, gradeFemale = 0;
+            const gradeStudents = activeSchoolStudents.filter(s => s.grade === grade);
+            if (gradeStudents.length === 0) return;
+
+            const uniqueClasses = [...new Set(gradeStudents.map(s => s.className))].sort((a, b) => {
+              let idxA = classOrder.indexOf(a); let idxB = classOrder.indexOf(b);
+              if (idxA === -1) idxA = 99; if (idxB === -1) idxB = 99;
+              return idxA - idxB;
+            });
+
+            uniqueClasses.forEach(cls => {
+                const classStudents = gradeStudents.filter(s => s.className === cls);
+                const m = classStudents.filter(s => s.gender === '男').length;
+                const f = classStudents.filter(s => s.gender === '女').length;
+                const t = classStudents.length;
+                aoa.push([grade, cls, t, m, f]);
+                gradeTotal += t; gradeMale += m; gradeFemale += f;
+            });
+
+            aoa.push([`${grade} 總計`, '', gradeTotal, gradeMale, gradeFemale]);
+
+            if (grade.startsWith('國')) {
+                jhTotal += gradeTotal; jhMale += gradeMale; jhFemale += gradeFemale;
+            } else {
+                shTotal += gradeTotal; shMale += gradeMale; shFemale += gradeFemale;
+            }
+        });
+
+        if (jhTotal > 0) aoa.push(['國中部 總計', '', jhTotal, jhMale, jhFemale]);
+        if (shTotal > 0) aoa.push(['高中部 總計', '', shTotal, shMale, shFemale]);
+        aoa.push(['全校 總計', '', jhTotal + shTotal, jhMale + shMale, jhFemale + shFemale]);
+
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+        // 🌟 人數統計表專屬樣式
+        const borderStyle = { style: "thin", color: { rgb: "000000" } };
+        const baseStyle = { font: { name: "標楷體", sz: 12 }, alignment: { vertical: "center", horizontal: "center" } };
+        const titleStyle = { ...baseStyle, font: { name: "標楷體", sz: 16, bold: true }, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+        const headerStyle = { ...baseStyle, font: { name: "標楷體", sz: 12, bold: true }, fill: { fgColor: { rgb: "E2EFDA" } }, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+        const cellStyle = { ...baseStyle, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+        const subtotalStyle = { ...baseStyle, font: { name: "標楷體", sz: 12, bold: true }, fill: { fgColor: { rgb: "FFF2CC" } }, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+        const totalStyle = { ...baseStyle, font: { name: "標楷體", sz: 12, bold: true }, fill: { fgColor: { rgb: "FCE4D6" } }, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
+
+        ws['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }];
+        
+        let merges = [];
+        merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } });
+
+        for (let R = 0; R < aoa.length; R++) {
+            for (let C = 0; C < aoa[R].length; C++) {
+                const cellRef = XLSX.utils.encode_cell({ c: C, r: R });
+                if (!ws[cellRef]) ws[cellRef] = { v: aoa[R][C], t: "s" };
+
+                const rowData = aoa[R][0];
+                
+                if (R === 0) {
+                    ws[cellRef].s = titleStyle;
+                } else if (R === 1) {
+                    ws[cellRef].s = headerStyle;
+                } else if (String(rowData).includes('總計')) {
+                    if (String(rowData).includes('全校') || String(rowData).includes('部')) {
+                       ws[cellRef].s = totalStyle;
+                    } else {
+                       ws[cellRef].s = subtotalStyle;
+                    }
+                    if (C === 0 || C === 1) { // 幫合併欄位也上色
+                        ws[cellRef].s = String(rowData).includes('全校') || String(rowData).includes('部') ? totalStyle : subtotalStyle;
+                    }
+                } else {
+                    ws[cellRef].s = cellStyle;
+                }
+            }
+            if (String(aoa[R][0]).includes('總計')) {
+                merges.push({ s: { r: R, c: 0 }, e: { r: R, c: 1 } });
+            }
+        }
+        ws['!merges'] = merges;
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '人數統計表');
+        XLSX.writeFile(wb, `${activeSemester}_永年中學_班級人數統計表.xlsx`);
       };
 
       const GradeOptions = () => (
@@ -737,6 +836,35 @@
 
                 {activeTab === 'classList' && (
                   <div className="max-w-6xl mx-auto space-y-6">
+                    
+                    {/* 🌟 新增：全校總人數統計 (開放給一般行政與所有人員檢視) */}
+                    <div className="bg-slate-100 p-4 rounded-xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-emerald-100">
+                         <div className="flex items-center gap-2 mb-1">
+                           <i className="fa-solid fa-school text-emerald-600"></i>
+                           <span className="font-bold text-emerald-900">全校總計</span>
+                         </div>
+                         <div className="text-3xl font-black text-emerald-600 tracking-tight">{schoolTotal} <span className="text-sm font-medium text-emerald-600">人</span></div>
+                         <div className="text-xs font-bold text-slate-500 mt-1 bg-slate-50 px-3 py-1 rounded-full">男 {schoolMale} / 女 {schoolFemale}</div>
+                      </div>
+                      <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-blue-100">
+                         <div className="flex items-center gap-2 mb-1">
+                           <i className="fa-solid fa-users text-blue-500"></i>
+                           <span className="font-bold text-blue-900">國中部</span>
+                         </div>
+                         <div className="text-3xl font-black text-blue-600 tracking-tight">{jhTotal} <span className="text-sm font-medium text-blue-600">人</span></div>
+                         <div className="text-xs font-bold text-slate-500 mt-1 bg-slate-50 px-3 py-1 rounded-full">男 {jhMale} / 女 {jhFemale}</div>
+                      </div>
+                      <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-indigo-100">
+                         <div className="flex items-center gap-2 mb-1">
+                           <i className="fa-solid fa-user-graduate text-indigo-500"></i>
+                           <span className="font-bold text-indigo-900">高中部</span>
+                         </div>
+                         <div className="text-3xl font-black text-indigo-600 tracking-tight">{shTotal} <span className="text-sm font-medium text-indigo-600">人</span></div>
+                         <div className="text-xs font-bold text-slate-500 mt-1 bg-slate-50 px-3 py-1 rounded-full">男 {shMale} / 女 {shFemale}</div>
+                      </div>
+                    </div>
+
                     <div className="bg-indigo-50 p-6 rounded-xl shadow-sm border border-indigo-100 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
                       <div><h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2"><i className="fa-solid fa-download text-lg"></i>【{activeSemester}】名單批次產出 (完美排版)</h3></div>
                       <div className="flex flex-wrap gap-2 items-center">
@@ -748,7 +876,9 @@
                         <button onClick={() => exportGradeToExcel('高二')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">高二</button>
                         <button onClick={() => exportGradeToExcel('高三')} className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">高三</button>
                         <div className="w-px h-8 bg-indigo-200 mx-2"></div>
-                        <button onClick={exportWholeSchoolToExcel} className="bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-teal-700"><i className="fa-solid fa-file-excel"></i> 全校分頁總表</button>
+                        <button onClick={exportWholeSchoolToExcel} className="bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-teal-700 transition-colors shadow-sm"><i className="fa-solid fa-file-excel"></i> 全校分頁總表</button>
+                        {/* 🌟 增加人數統計按鈕 */}
+                        <button onClick={exportStudentCountsToExcel} className="bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-amber-700 transition-colors shadow-sm"><i className="fa-solid fa-chart-pie"></i> 匯出人數統計</button>
                       </div>
                     </div>
 
@@ -779,8 +909,8 @@
                           {currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass).sort((a, b) => getSeatNum(a.seatNumber) - getSeatNum(b.seatNumber)).map((student, index) => (
                             <tr key={`${student.id || index}-${student.name}`} className="hover:bg-slate-50 transition-colors">
                               <td className="p-4 text-slate-700 font-bold">{student.seatNumber}</td>
-                              <td className="p-4 text-slate-700 font-mono">{student.status === '轉出' || student.status === '畢業' || student.status === '放棄學籍' ? '-' : (student.id || '無學號')}</td>
-                              <td className="p-4 text-slate-800 font-medium">{student.status === '轉出' || student.status === '畢業' || student.status === '放棄學籍' ? '-' : student.name} {student.gender === '女' && student.status !== '轉出' && student.status !== '畢業' && student.status !== '放棄學籍' && <span className="text-pink-500 ml-1 font-bold">*</span>}</td>
+                              <td className="p-4 text-slate-700 font-mono">{['轉出', '畢業', '放棄學籍'].includes(student.status) ? '-' : (student.id || '無學號')}</td>
+                              <td className="p-4 text-slate-800 font-medium">{['轉出', '畢業', '放棄學籍'].includes(student.status) ? '-' : student.name} {student.gender === '女' && !['轉出', '畢業', '放棄學籍'].includes(student.status) && <span className="text-pink-500 ml-1 font-bold">*</span>}</td>
                               <td className="p-4 text-slate-600">{student.gender}</td>
                               <td className="p-4">
                                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
@@ -803,7 +933,6 @@
                     
                     {/* 🌟 全校總人數統計 (細分國高中) */}
                     <div className="bg-slate-100 p-4 rounded-xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {/* 全校 */}
                       <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-emerald-100">
                          <div className="flex items-center gap-2 mb-1">
                            <i className="fa-solid fa-school text-emerald-600"></i>
@@ -812,7 +941,6 @@
                          <div className="text-3xl font-black text-emerald-600 tracking-tight">{schoolTotal} <span className="text-sm font-medium text-emerald-600">人</span></div>
                          <div className="text-xs font-bold text-slate-500 mt-1 bg-slate-50 px-3 py-1 rounded-full">男 {schoolMale} / 女 {schoolFemale}</div>
                       </div>
-                      {/* 國中部 */}
                       <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-blue-100">
                          <div className="flex items-center gap-2 mb-1">
                            <i className="fa-solid fa-users text-blue-500"></i>
@@ -821,7 +949,6 @@
                          <div className="text-3xl font-black text-blue-600 tracking-tight">{jhTotal} <span className="text-sm font-medium text-blue-600">人</span></div>
                          <div className="text-xs font-bold text-slate-500 mt-1 bg-slate-50 px-3 py-1 rounded-full">男 {jhMale} / 女 {jhFemale}</div>
                       </div>
-                      {/* 高中部 */}
                       <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-indigo-100">
                          <div className="flex items-center gap-2 mb-1">
                            <i className="fa-solid fa-user-graduate text-indigo-500"></i>
@@ -845,13 +972,27 @@
                         </div>
                       </div>
 
-                      <div className="flex gap-2 justify-end pt-4 border-t border-slate-100">
-                        <button onClick={() => setIsImportModalOpen(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
-                          <i className="fa-solid fa-file-excel"></i> 匯入/更新 Excel 名單
-                        </button>
-                        <button onClick={openAddModal} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
-                          <i className="fa-solid fa-user-plus"></i> 新增轉入
-                        </button>
+                      <div className="flex flex-wrap justify-between items-center gap-4 pt-4 border-t border-slate-100">
+                        <div className="flex flex-wrap gap-2">
+                          <button onClick={exportWholeSchoolToExcel} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
+                            <i className="fa-solid fa-file-excel"></i> 匯出全校總表
+                          </button>
+                          <button onClick={() => exportClassToExcel(manageFilterGrade, manageFilterClass)} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
+                            <i className="fa-solid fa-file-arrow-down"></i> 匯出此班級名單
+                          </button>
+                          {/* 🌟 增加人數統計按鈕 */}
+                          <button onClick={exportStudentCountsToExcel} className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
+                            <i className="fa-solid fa-chart-pie"></i> 匯出人數統計
+                          </button>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => setIsImportModalOpen(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
+                            <i className="fa-solid fa-upload"></i> 匯入/更新 Excel
+                          </button>
+                          <button onClick={openAddModal} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
+                            <i className="fa-solid fa-user-plus"></i> 新增轉入
+                          </button>
+                        </div>
                       </div>
                     </div>
 
