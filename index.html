@@ -211,10 +211,31 @@
           if (editingStudent) {
             db.collection("students").doc(editingStudent.docId).update({ ...formData, semester: activeSemester }).then(() => {
               let logMsg = '';
-              if (editingStudent.grade !== formData.grade || editingStudent.className !== formData.className || editingStudent.seatNumber !== formData.seatNumber) {
-                logMsg += `學生 ${formData.name} 從 ${editingStudent.grade}${editingStudent.className}班 ${editingStudent.seatNumber}號 異動至 ${formData.grade}${formData.className}班 ${formData.seatNumber}號。 `;
+              const oldClass = `${editingStudent.grade}${editingStudent.className}班`;
+              const newClass = `${formData.grade}${formData.className}班`;
+              const isClassChanged = oldClass !== newClass;
+              const isSeatChanged = editingStudent.seatNumber !== formData.seatNumber;
+              const isStatusChanged = editingStudent.status !== formData.status;
+
+              if (isClassChanged) {
+                logMsg += `【轉班異動】學生 ${formData.name} 由原本的 ${oldClass} 轉入 ${newClass} (新座號: ${formData.seatNumber}號)。 `;
+              } else if (isSeatChanged) {
+                logMsg += `【座號異動】學生 ${formData.name} (${newClass}) 座號由 ${editingStudent.seatNumber}號 改為 ${formData.seatNumber}號。 `;
               }
-              if (editingStudent.status !== formData.status) logMsg += `學籍狀態變更為「${formData.status}」。 `;
+
+              if (isStatusChanged) {
+                if (['轉出', '休學', '放棄學籍', '畢業'].includes(formData.status)) {
+                  logMsg += `【${formData.status}通知】學生 ${formData.name} (${newClass}) 已辦理${formData.status}。 `;
+                } else if (formData.status === '轉班' && !isClassChanged) {
+                  logMsg += `【狀態變更】學生 ${formData.name} 狀態已標記為「轉班」，後續請記得更新其班級。 `;
+                } else if (!isClassChanged) {
+                  logMsg += `【狀態變更】學生 ${formData.name} 狀態改為「${formData.status}」。 `;
+                }
+              }
+              
+              if (!logMsg && (editingStudent.name !== formData.name || editingStudent.id !== formData.id || editingStudent.gender !== formData.gender)) {
+                 logMsg += `【資料更新】已修改學生 ${formData.name} 的基本資料。 `;
+              }
               
               if (logMsg) { if (formData.transferDate) logMsg += `(生效日: ${formData.transferDate})`; addLog(logMsg, activeSemester, auth.department, 'single'); }
               setIsModalOpen(false);
@@ -222,7 +243,7 @@
             }).catch(err => showAlert("更新失敗：" + err.message));
           } else {
             db.collection("students").add({ ...formData, semester: activeSemester }).then((docRef) => {
-              addLog(`新增學生：${formData.name} 分發至 ${formData.grade}${formData.className}班，座號 ${formData.seatNumber}`, activeSemester, auth.department, 'single');
+              addLog(`【新增學生】${formData.name} 加入 ${formData.grade}${formData.className}班 (座號 ${formData.seatNumber})，狀態為「${formData.status}」${formData.transferDate ? ` (生效日: ${formData.transferDate})` : ''}`, activeSemester, auth.department, 'single');
               setIsModalOpen(false);
               triggerUndoableAction('ADD', docRef.id, null, `新增了學生 ${formData.name}`);
             }).catch(err => showAlert("新增失敗：" + err.message));
@@ -233,7 +254,7 @@
       const handleDeleteStudent = (studentToDelete) => {
         showConfirm(`確定要刪除學生「${studentToDelete.name}」的資料嗎？`, () => {
           db.collection("students").doc(studentToDelete.docId).delete().then(() => {
-            addLog(`刪除紀錄：已將學生「${studentToDelete.name}」刪除。`, activeSemester, auth.department, 'single');
+            addLog(`【刪除紀錄】已將學生「${studentToDelete.name}」(${studentToDelete.grade}${studentToDelete.className}班) 的資料徹底移除。`, activeSemester, auth.department, 'single');
             setIsModalOpen(false);
             triggerUndoableAction('DELETE', studentToDelete.docId, studentToDelete, `刪除了學生 ${studentToDelete.name}`);
           });
