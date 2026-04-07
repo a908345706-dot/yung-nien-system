@@ -41,13 +41,21 @@
     const db = firebase.firestore();
 
     function App() {
-      // === 系統帳號狀態 ===
-      const [appAccounts, setAppAccounts] = useState({
-        admin: { password: '123', role: 'admin', name: '註冊組長', department: '教務處 (管理員)' },
-        academic: { password: '123', role: 'staff', name: '教務處行政', department: '教務處' },
-        studentAffairs: { password: '123', role: 'staff', name: '學務處行政', department: '學務處' },
-        counseling: { password: '123', role: 'staff', name: '輔導室行政', department: '輔導室' },
-        generalAffairs: { password: '123', role: 'staff', name: '總務處行政', department: '總務處' }
+      // === 🌟 系統帳號狀態 (加入 LocalStorage 與雲端連線) ===
+      const [appAccounts, setAppAccounts] = useState(() => {
+        const savedAccounts = localStorage.getItem('yungNienAccounts');
+        if (savedAccounts) {
+          try {
+            return JSON.parse(savedAccounts);
+          } catch(e) {}
+        }
+        return {
+          admin: { password: '123', role: 'admin', name: '註冊組長', department: '教務處 (管理員)' },
+          academic: { password: '123', role: 'staff', name: '教務處行政', department: '教務處' },
+          studentAffairs: { password: '123', role: 'staff', name: '學務處行政', department: '學務處' },
+          counseling: { password: '123', role: 'staff', name: '輔導室行政', department: '輔導室' },
+          generalAffairs: { password: '123', role: 'staff', name: '總務處行政', department: '總務處' }
+        };
       });
 
       const [auth, setAuth] = useState({ loggedIn: false, username: '', role: '', name: '', department: '' });
@@ -90,7 +98,21 @@
       const [formData, setFormData] = useState({ id: '', name: '', seatNumber: '1', gender: '男', grade: '國一', className: '忠', status: '在籍', transferDate: '', originalClassSeat: '' });
       const [newSemesterData, setNewSemesterData] = useState({ name: '', copyOldData: true, promoteGrade: false, jhClassAssignment: 'keep', shClassAssignment: 'keep' });
 
-      // === 監聽 Firebase 資料庫 ===
+      // === 🌟 監聽 Firebase 雲端密碼資料庫 (獨立於登入狀態之外) ===
+      useEffect(() => {
+        const unsubscribeAccounts = db.collection("system").doc("accounts").onSnapshot((doc) => {
+          if (doc.exists) {
+            setAppAccounts(doc.data());
+            localStorage.setItem('yungNienAccounts', JSON.stringify(doc.data()));
+          } else {
+            // 如果雲端尚未建立帳號表，則初始化一份
+            db.collection("system").doc("accounts").set(appAccounts);
+          }
+        });
+        return () => unsubscribeAccounts();
+      }, []);
+
+      // === 監聽 Firebase 學生與通知資料庫 ===
       useEffect(() => {
         if (!auth.loggedIn) return;
         const unsubscribeStudents = db.collection("students").onSnapshot((snapshot) => {
@@ -117,7 +139,6 @@
 
       const currentSemesterStudents = students.filter(s => s.semester === activeSemester);
       
-      // === 處理通知分頁邏輯 ===
       const filteredLogs = logs
         .filter(l => l.semester === activeSemester)
         .filter(l => l.timeMs ? (Date.now() - l.timeMs <= 7 * 24 * 60 * 60 * 1000) : true)
@@ -147,6 +168,7 @@
          setIsPasswordModalOpen(true);
       };
 
+      // === 🌟 修改：將新密碼寫入雲端 ===
       const handleChangePassword = (e) => {
         e.preventDefault();
         const isChangingOther = auth.role === 'admin' && passwordForm.targetAccount !== auth.username;
@@ -164,11 +186,17 @@
           }
         };
 
-        setAppAccounts(updatedAccounts);
-        localStorage.setItem('yungNienAccounts', JSON.stringify(updatedAccounts)); // 🌟 將密碼儲存到瀏覽器快取中
-        
-        showAlert(`已成功修改「${updatedAccounts[passwordForm.targetAccount].name}」的密碼！`, '修改完成');
-        setIsPasswordModalOpen(false);
+        // 寫入 Firebase 雲端
+        db.collection("system").doc("accounts").set(updatedAccounts)
+          .then(() => {
+             setAppAccounts(updatedAccounts);
+             localStorage.setItem('yungNienAccounts', JSON.stringify(updatedAccounts));
+             showAlert(`已成功修改「${updatedAccounts[passwordForm.targetAccount].name}」的密碼！雲端同步完成。`, '修改成功');
+             setIsPasswordModalOpen(false);
+          })
+          .catch(err => {
+             showAlert('雲端密碼更新失敗：' + err.message, '錯誤');
+          });
       };
 
       const addLog = (message, semester = activeSemester, department = auth.department, type = 'info') => {
@@ -228,7 +256,6 @@
               const isStatusChanged = editingStudent.status !== formData.status;
 
               if (isClassChanged) {
-                // 🌟 修改：確保原本的座號後面加上「號」
                 logMsg += `【轉班異動】學生 ${formData.name} 由原本的 ${editingStudent.grade}${editingStudent.className}${editingStudent.seatNumber}號 轉到 ${formData.grade}${formData.className} (新座號: ${formData.seatNumber}號)。 `;
               } else if (isSeatChanged) {
                 logMsg += `【座號異動】學生 ${formData.name} (${newClass}) 座號由 ${editingStudent.seatNumber}號 改為 ${formData.seatNumber}號。 `;
@@ -597,7 +624,7 @@
       };
 
       const exportStudentCountsToExcel = () => {
-        const activeSchoolStudents = students.filter(s => s.semester === activeSemester && !['轉出', '畢業', '放棄學籍'].includes(s.status));
+        const activeSchoolStudents = students.filter(s => s.semester === activeSemester && ['在籍', '轉班'].includes(s.status));
         if (activeSchoolStudents.length === 0) return showAlert(`目前 ${activeSemester} 沒有任何學生資料`);
 
         const grades = ['國一', '國二', '國三', '高一', '高二', '高三'];
@@ -705,7 +732,7 @@
         </React.Fragment>
       );
 
-      // 🌟 計算全校與各部實際人數 (修改：嚴格只計算「在籍」與「轉班」)
+      // 🌟 計算全校與各部實際人數
       const activeSchoolStudents = currentSemesterStudents.filter(s => ['在籍', '轉班'].includes(s.status));
       
       const schoolTotal = activeSchoolStudents.length;
@@ -722,13 +749,11 @@
       const shMale = shStudents.filter(s => s.gender === '男').length;
       const shFemale = shStudents.filter(s => s.gender === '女').length;
 
-      // 計算各班實際人數 (單班線上檢視 - 嚴格計算)
       const activeClassListStudents = currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass && ['在籍', '轉班'].includes(s.status));
       const classListTotal = activeClassListStudents.length;
       const classListMale = activeClassListStudents.filter(s => s.gender === '男').length;
       const classListFemale = activeClassListStudents.filter(s => s.gender === '女').length;
 
-      // 計算各班實際人數 (學籍異動管理 - 嚴格計算)
       const activeManageListStudents = currentSemesterStudents.filter(s => s.grade === manageFilterGrade && s.className === manageFilterClass && ['在籍', '轉班'].includes(s.status));
       const manageListTotal = activeManageListStudents.length;
       const manageListMale = activeManageListStudents.filter(s => s.gender === '男').length;
