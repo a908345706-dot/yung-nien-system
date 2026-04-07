@@ -156,8 +156,18 @@
         if (passwordForm.new !== passwordForm.confirm) return showAlert('新密碼與確認密碼不一致！', '修改失敗');
         if (passwordForm.new.length < 3) return showAlert('密碼長度過短，請至少輸入3個字元。', '修改失敗');
         
-        setAppAccounts({ ...appAccounts, [passwordForm.targetAccount]: { ...appAccounts[passwordForm.targetAccount], password: passwordForm.new }});
-        showAlert(`已成功修改「${appAccounts[passwordForm.targetAccount].name}」的密碼！`, '修改完成');
+        const updatedAccounts = {
+          ...appAccounts,
+          [passwordForm.targetAccount]: {
+            ...appAccounts[passwordForm.targetAccount],
+            password: passwordForm.new
+          }
+        };
+
+        setAppAccounts(updatedAccounts);
+        localStorage.setItem('yungNienAccounts', JSON.stringify(updatedAccounts)); // 🌟 將密碼儲存到瀏覽器快取中
+        
+        showAlert(`已成功修改「${updatedAccounts[passwordForm.targetAccount].name}」的密碼！`, '修改完成');
         setIsPasswordModalOpen(false);
       };
 
