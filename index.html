@@ -11,9 +11,11 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+  <!-- 載入 Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
   
+  <!-- 🌟 支援框線與字體的專業 Excel 產出引擎 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body class="bg-slate-50">
@@ -76,9 +78,9 @@
       const logsPerPage = 15;
 
       const [searchTerm, setSearchTerm] = useState('');
-      const [filterGrade, setFilterGrade] = useState('高一');
+      const [filterGrade, setFilterGrade] = useState('國一');
       const [filterClass, setFilterClass] = useState('忠');
-      const [manageFilterGrade, setManageFilterGrade] = useState('高一');
+      const [manageFilterGrade, setManageFilterGrade] = useState('國一');
       const [manageFilterClass, setManageFilterClass] = useState('忠');
 
       const [isModalOpen, setIsModalOpen] = useState(false);
@@ -115,7 +117,7 @@
 
       const currentSemesterStudents = students.filter(s => s.semester === activeSemester);
       
-      // === 處理通知分頁邏輯 (7天內, 最多 20 筆) ===
+      // === 處理通知分頁邏輯 ===
       const filteredLogs = logs
         .filter(l => l.semester === activeSemester)
         .filter(l => l.timeMs ? (Date.now() - l.timeMs <= 7 * 24 * 60 * 60 * 1000) : true)
@@ -240,7 +242,6 @@
 
       const openEditModal = (student) => { setEditingStudent(student); setFormData({ ...student }); setIsModalOpen(true); };
       
-      // 🌟 優化：點擊新增轉入時，預設狀態改為「轉班」
       const openAddModal = () => { 
         setEditingStudent(null); 
         setFormData({ 
@@ -260,7 +261,7 @@
 
         if (newSemesterData.copyOldData) {
            const gradePromotionMap = { '國一': '國二', '國二': '國三', '國三': '畢業', '高一': '高二', '高二': '高三', '高三': '畢業' };
-           let studentsToCopy = students.filter(s => s.semester === activeSemester && s.status !== '轉出' && s.status !== '畢業');
+           let studentsToCopy = students.filter(s => s.semester === activeSemester && s.status !== '轉出' && s.status !== '畢業' && s.status !== '放棄學籍');
            const batch = db.batch(); let copyCount = 0;
 
            studentsToCopy.forEach(s => {
@@ -410,7 +411,7 @@
           uniqueClasses.forEach(cls => {
             const student = gradeStudents.find(s => s.className === cls && getSeatNum(s.seatNumber) === seat);
             let idStr = '', nameStr = '';
-            if (student && student.status !== '轉出' && student.status !== '休學' && student.status !== '畢業') {
+            if (student && student.status !== '轉出' && student.status !== '休學' && student.status !== '畢業' && student.status !== '放棄學籍') {
               idStr = student.id;
               nameStr = student.name + (student.gender === '女' ? '*' : '');
             }
@@ -482,7 +483,7 @@
         for (let seat = 1; seat <= maxRows; seat++) {
           const student = classStudents.find(s => getSeatNum(s.seatNumber) === seat);
           let idStr = '', nameStr = '';
-          if (student && student.status !== '轉出' && student.status !== '休學' && student.status !== '畢業') {
+          if (student && student.status !== '轉出' && student.status !== '休學' && student.status !== '畢業' && student.status !== '放棄學籍') {
             idStr = student.id;
             nameStr = student.name + (student.gender === '女' ? '*' : '');
           }
@@ -573,6 +574,35 @@
           <option value="忠">忠 班</option><option value="孝">孝 班</option><option value="仁">仁 班</option><option value="愛">愛 班</option><option value="信">信 班</option><option value="義">義 班</option><option value="和">和 班</option><option value="平">平 班</option><option value="未編班">未編班</option>
         </React.Fragment>
       );
+
+      // 🌟 計算全校與各部實際人數
+      const activeSchoolStudents = currentSemesterStudents.filter(s => !['轉出', '畢業', '放棄學籍'].includes(s.status));
+      
+      const schoolTotal = activeSchoolStudents.length;
+      const schoolMale = activeSchoolStudents.filter(s => s.gender === '男').length;
+      const schoolFemale = activeSchoolStudents.filter(s => s.gender === '女').length;
+
+      const jhStudents = activeSchoolStudents.filter(s => s.grade.startsWith('國'));
+      const jhTotal = jhStudents.length;
+      const jhMale = jhStudents.filter(s => s.gender === '男').length;
+      const jhFemale = jhStudents.filter(s => s.gender === '女').length;
+
+      const shStudents = activeSchoolStudents.filter(s => s.grade.startsWith('高'));
+      const shTotal = shStudents.length;
+      const shMale = shStudents.filter(s => s.gender === '男').length;
+      const shFemale = shStudents.filter(s => s.gender === '女').length;
+
+      // 計算各班實際人數 (單班線上檢視)
+      const activeClassListStudents = currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass && !['轉出', '畢業', '放棄學籍'].includes(s.status));
+      const classListTotal = activeClassListStudents.length;
+      const classListMale = activeClassListStudents.filter(s => s.gender === '男').length;
+      const classListFemale = activeClassListStudents.filter(s => s.gender === '女').length;
+
+      // 計算各班實際人數 (學籍異動管理)
+      const activeManageListStudents = currentSemesterStudents.filter(s => s.grade === manageFilterGrade && s.className === manageFilterClass && !['轉出', '畢業', '放棄學籍'].includes(s.status));
+      const manageListTotal = activeManageListStudents.length;
+      const manageListMale = activeManageListStudents.filter(s => s.gender === '男').length;
+      const manageListFemale = activeManageListStudents.filter(s => s.gender === '女').length;
 
       return (
         <React.Fragment>
@@ -722,15 +752,20 @@
                       </div>
                     </div>
 
-                    <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-100 mt-6">
-                      <div className="flex gap-4 items-center">
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 mt-6 flex flex-col gap-4">
+                      <div className="flex flex-wrap gap-4 items-center">
                         <h2 className="text-2xl font-bold text-slate-800">單班線上檢視</h2>
+                        <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-bold shadow-sm whitespace-nowrap">
+                          班級人數：{classListTotal} 人 (男 {classListMale} / 女 {classListFemale})
+                        </span>
                         <select className="border rounded-md px-3 py-2 bg-slate-50 outline-none" value={filterGrade} onChange={(e) => setFilterGrade(e.target.value)}><GradeOptions /></select>
                         <select className="border rounded-md px-3 py-2 bg-slate-50 outline-none" value={filterClass} onChange={(e) => setFilterClass(e.target.value)}><ClassOptions /></select>
                       </div>
-                      <button onClick={exportClassToExcel} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-blue-700 transition-colors shadow-sm">
-                        <i className="fa-solid fa-file-arrow-down"></i> 匯出此班級名單
-                      </button>
+                      <div className="flex justify-end pt-4 border-t border-slate-100">
+                        <button onClick={exportClassToExcel} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-blue-700 transition-colors shadow-sm">
+                          <i className="fa-solid fa-file-arrow-down"></i> 匯出此班級名單
+                        </button>
+                      </div>
                     </div>
 
                     <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
@@ -744,14 +779,15 @@
                           {currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass).sort((a, b) => getSeatNum(a.seatNumber) - getSeatNum(b.seatNumber)).map((student, index) => (
                             <tr key={`${student.id || index}-${student.name}`} className="hover:bg-slate-50 transition-colors">
                               <td className="p-4 text-slate-700 font-bold">{student.seatNumber}</td>
-                              <td className="p-4 text-slate-700 font-mono">{student.status === '轉出' || student.status === '畢業' ? '-' : (student.id || '無學號')}</td>
-                              <td className="p-4 text-slate-800 font-medium">{student.status === '轉出' || student.status === '畢業' ? '-' : student.name} {student.gender === '女' && student.status !== '轉出' && student.status !== '畢業' && <span className="text-pink-500 ml-1 font-bold">*</span>}</td>
+                              <td className="p-4 text-slate-700 font-mono">{student.status === '轉出' || student.status === '畢業' || student.status === '放棄學籍' ? '-' : (student.id || '無學號')}</td>
+                              <td className="p-4 text-slate-800 font-medium">{student.status === '轉出' || student.status === '畢業' || student.status === '放棄學籍' ? '-' : student.name} {student.gender === '女' && student.status !== '轉出' && student.status !== '畢業' && student.status !== '放棄學籍' && <span className="text-pink-500 ml-1 font-bold">*</span>}</td>
                               <td className="p-4 text-slate-600">{student.gender}</td>
                               <td className="p-4">
                                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                                   student.status === '在籍' ? 'bg-green-100 text-green-700' : 
                                   student.status === '休學' ? 'bg-amber-100 text-amber-700' : 
-                                  student.status === '轉班' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                                  student.status === '轉班' ? 'bg-blue-100 text-blue-700' : 
+                                  student.status === '放棄學籍' ? 'bg-slate-200 text-slate-700' : 'bg-red-100 text-red-700'
                                 }`}>{student.status}</span>
                               </td>
                             </tr>
@@ -764,17 +800,52 @@
 
                 {activeTab === 'manage' && auth.role === 'admin' && (
                   <div className="max-w-6xl mx-auto space-y-6">
-                    <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                      <div className="flex gap-3 items-center">
+                    
+                    {/* 🌟 全校總人數統計 (細分國高中) */}
+                    <div className="bg-slate-100 p-4 rounded-xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* 全校 */}
+                      <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-emerald-100">
+                         <div className="flex items-center gap-2 mb-1">
+                           <i className="fa-solid fa-school text-emerald-600"></i>
+                           <span className="font-bold text-emerald-900">全校總計</span>
+                         </div>
+                         <div className="text-3xl font-black text-emerald-600 tracking-tight">{schoolTotal} <span className="text-sm font-medium text-emerald-600">人</span></div>
+                         <div className="text-xs font-bold text-slate-500 mt-1 bg-slate-50 px-3 py-1 rounded-full">男 {schoolMale} / 女 {schoolFemale}</div>
+                      </div>
+                      {/* 國中部 */}
+                      <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-blue-100">
+                         <div className="flex items-center gap-2 mb-1">
+                           <i className="fa-solid fa-users text-blue-500"></i>
+                           <span className="font-bold text-blue-900">國中部</span>
+                         </div>
+                         <div className="text-3xl font-black text-blue-600 tracking-tight">{jhTotal} <span className="text-sm font-medium text-blue-600">人</span></div>
+                         <div className="text-xs font-bold text-slate-500 mt-1 bg-slate-50 px-3 py-1 rounded-full">男 {jhMale} / 女 {jhFemale}</div>
+                      </div>
+                      {/* 高中部 */}
+                      <div className="flex flex-col items-center justify-center p-3 bg-white rounded-lg shadow-sm border border-indigo-100">
+                         <div className="flex items-center gap-2 mb-1">
+                           <i className="fa-solid fa-user-graduate text-indigo-500"></i>
+                           <span className="font-bold text-indigo-900">高中部</span>
+                         </div>
+                         <div className="text-3xl font-black text-indigo-600 tracking-tight">{shTotal} <span className="text-sm font-medium text-indigo-600">人</span></div>
+                         <div className="text-xs font-bold text-slate-500 mt-1 bg-slate-50 px-3 py-1 rounded-full">男 {shMale} / 女 {shFemale}</div>
+                      </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col gap-4">
+                      <div className="flex flex-wrap gap-3 items-center">
                         <select className="border rounded-lg px-3 py-2 bg-slate-50 outline-none font-medium text-slate-700" value={manageFilterGrade} onChange={(e) => setManageFilterGrade(e.target.value)}><GradeOptions /></select>
                         <select className="border rounded-lg px-3 py-2 bg-slate-50 outline-none font-medium text-slate-700" value={manageFilterClass} onChange={(e) => setManageFilterClass(e.target.value)}><ClassOptions /></select>
-                        <div className="relative ml-2 w-48 xl:w-64">
+                        <span className="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full text-sm font-bold shadow-sm whitespace-nowrap">
+                          班級人數：{manageListTotal} 人 (男 {manageListMale} / 女 {manageListFemale})
+                        </span>
+                        <div className="relative ml-2 flex-1 min-w-[200px] max-w-xs">
                           <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
                           <input type="text" placeholder="班內搜尋..." className="pl-9 pr-4 py-2 border rounded-lg w-full outline-none bg-slate-50 text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
                         </div>
                       </div>
 
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 justify-end pt-4 border-t border-slate-100">
                         <button onClick={() => setIsImportModalOpen(true)} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
                           <i className="fa-solid fa-file-excel"></i> 匯入/更新 Excel 名單
                         </button>
@@ -801,7 +872,9 @@
                               <td className="p-4">
                                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                                   student.status === '在籍' ? 'bg-green-100 text-green-700' : 
-                                  student.status === '轉班' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                                  student.status === '轉班' ? 'bg-blue-100 text-blue-700' : 
+                                  student.status === '休學' ? 'bg-amber-100 text-amber-700' : 
+                                  student.status === '放棄學籍' ? 'bg-slate-200 text-slate-700' : 'bg-red-100 text-red-700'
                                 }`}>{student.status}</span>
                               </td>
                               <td className="p-4 text-slate-500 text-sm">{student.transferDate ? <span className="flex items-center gap-1"><i className="fa-solid fa-calendar-days text-xs"></i>{student.transferDate}</span> : '-'}</td>
@@ -846,6 +919,11 @@
                             </div>
                           );
                         })}
+                        {filteredLogs.length === 0 && (
+                          <div className="text-center p-8 text-slate-400 border-2 border-dashed rounded-lg">
+                            目前沒有任何異動通知紀錄
+                          </div>
+                        )}
                       </div>
 
                       {totalLogPages > 1 && (
@@ -879,7 +957,6 @@
                           <select name="gender" value={formData.gender} onChange={handleInputChange} className="w-full border rounded-lg px-3 py-2 bg-slate-50 outline-none"><option value="男">男</option><option value="女">女</option></select>
                         </div>
                         
-                        {/* 🌟 修改：新增學生時隱藏狀態欄；編輯學生時簡化「轉班」標籤 */}
                         {editingStudent && (
                           <div className="space-y-1">
                             <label className="text-sm font-medium text-slate-700">學籍狀態</label>
@@ -888,6 +965,7 @@
                                <option value="轉班">轉班</option>
                                <option value="轉出">轉出</option>
                                <option value="休學">休學</option>
+                               <option value="放棄學籍">放棄學籍</option>
                                <option value="畢業">畢業</option>
                             </select>
                           </div>
@@ -914,7 +992,6 @@
                 </div>
               )}
 
-              {/* 其餘 Modal 部分維持不變 */}
               {isImportModalOpen && auth.role === 'admin' && (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
                   <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
