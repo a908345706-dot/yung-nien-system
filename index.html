@@ -87,7 +87,6 @@
       const [isImportModalOpen, setIsImportModalOpen] = useState(false);
       const [isNewSemesterModalOpen, setIsNewSemesterModalOpen] = useState(false);
       const [editingStudent, setEditingStudent] = useState(null);
-      // 🌟 新增欄位 originalClassSeat
       const [formData, setFormData] = useState({ id: '', name: '', seatNumber: '1', gender: '男', grade: '國一', className: '忠', status: '在籍', transferDate: '', originalClassSeat: '' });
       const [newSemesterData, setNewSemesterData] = useState({ name: '', copyOldData: true, promoteGrade: false, jhClassAssignment: 'keep', shClassAssignment: 'keep' });
 
@@ -219,7 +218,8 @@
               const isStatusChanged = editingStudent.status !== formData.status;
 
               if (isClassChanged) {
-                logMsg += `【轉班異動】學生 ${formData.name} 由原本的 ${editingStudent.grade}${editingStudent.className}${editingStudent.seatNumber} 轉到 ${formData.grade}${formData.className} (新座號: ${formData.seatNumber}號)。 `;
+                // 🌟 修改：確保原本的座號後面加上「號」
+                logMsg += `【轉班異動】學生 ${formData.name} 由原本的 ${editingStudent.grade}${editingStudent.className}${editingStudent.seatNumber}號 轉到 ${formData.grade}${formData.className} (新座號: ${formData.seatNumber}號)。 `;
               } else if (isSeatChanged) {
                 logMsg += `【座號異動】學生 ${formData.name} (${newClass}) 座號由 ${editingStudent.seatNumber}號 改為 ${formData.seatNumber}號。 `;
               }
@@ -271,7 +271,7 @@
           grade: manageFilterGrade, className: manageFilterClass, 
           status: '轉班', 
           transferDate: new Date().toISOString().split('T')[0],
-          originalClassSeat: '' // 🌟 重置原班座號
+          originalClassSeat: '' 
         }); 
         setIsModalOpen(true); 
       };
@@ -299,7 +299,6 @@
              }
              if (newStatus !== '畢業') {
                 const newDocRef = db.collection("students").doc(); 
-                // 🌟 自動幫跨學期的學生帶入「原班座號」
                 const origInfo = `${s.grade}${s.className} ${s.seatNumber}`;
                 batch.set(newDocRef, { ...s, semester: newSem, grade: newGrade, className: newClassName, seatNumber: newSeatNumber, status: newStatus, transferDate: '', originalClassSeat: origInfo });
                 copyCount++;
@@ -408,7 +407,6 @@
         return `${today.getFullYear() - 1911}.${today.getMonth() + 1}.${today.getDate()}`;
       };
 
-      // === 完美排版 Excel 產出邏輯 ===
       const generateGradeAOA = (targetGrade) => {
         const classOrder = ['忠', '孝', '仁', '愛', '信', '義', '和', '平', '未編班'];
         const gradeStudents = students.filter(s => s.semester === activeSemester && s.grade === targetGrade);
@@ -697,8 +695,8 @@
         </React.Fragment>
       );
 
-      // 🌟 計算全校與各部實際人數
-      const activeSchoolStudents = currentSemesterStudents.filter(s => !['轉出', '畢業', '放棄學籍'].includes(s.status));
+      // 🌟 計算全校與各部實際人數 (修改：嚴格只計算「在籍」與「轉班」)
+      const activeSchoolStudents = currentSemesterStudents.filter(s => ['在籍', '轉班'].includes(s.status));
       
       const schoolTotal = activeSchoolStudents.length;
       const schoolMale = activeSchoolStudents.filter(s => s.gender === '男').length;
@@ -714,14 +712,14 @@
       const shMale = shStudents.filter(s => s.gender === '男').length;
       const shFemale = shStudents.filter(s => s.gender === '女').length;
 
-      // 計算各班實際人數 (單班線上檢視)
-      const activeClassListStudents = currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass && !['轉出', '畢業', '放棄學籍'].includes(s.status));
+      // 計算各班實際人數 (單班線上檢視 - 嚴格計算)
+      const activeClassListStudents = currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass && ['在籍', '轉班'].includes(s.status));
       const classListTotal = activeClassListStudents.length;
       const classListMale = activeClassListStudents.filter(s => s.gender === '男').length;
       const classListFemale = activeClassListStudents.filter(s => s.gender === '女').length;
 
-      // 計算各班實際人數 (學籍異動管理)
-      const activeManageListStudents = currentSemesterStudents.filter(s => s.grade === manageFilterGrade && s.className === manageFilterClass && !['轉出', '畢業', '放棄學籍'].includes(s.status));
+      // 計算各班實際人數 (學籍異動管理 - 嚴格計算)
+      const activeManageListStudents = currentSemesterStudents.filter(s => s.grade === manageFilterGrade && s.className === manageFilterClass && ['在籍', '轉班'].includes(s.status));
       const manageListTotal = activeManageListStudents.length;
       const manageListMale = activeManageListStudents.filter(s => s.gender === '男').length;
       const manageListFemale = activeManageListStudents.filter(s => s.gender === '女').length;
@@ -925,7 +923,6 @@
                             <th className="p-4 font-semibold w-24">座號</th>
                             <th className="p-4 font-semibold">學號</th>
                             <th className="p-4 font-semibold">姓名</th>
-                            <th className="p-4 font-semibold">原班座號</th>
                             <th className="p-4 font-semibold w-24">性別</th>
                             <th className="p-4 font-semibold">狀態</th>
                           </tr>
@@ -936,7 +933,6 @@
                               <td className="p-4 text-slate-700 font-bold">{student.seatNumber}</td>
                               <td className="p-4 text-slate-700 font-mono">{['轉出', '畢業', '放棄學籍'].includes(student.status) ? '-' : (student.id || '無學號')}</td>
                               <td className="p-4 text-slate-800 font-medium">{['轉出', '畢業', '放棄學籍'].includes(student.status) ? '-' : student.name} {student.gender === '女' && !['轉出', '畢業', '放棄學籍'].includes(student.status) && <span className="text-pink-500 ml-1 font-bold">*</span>}</td>
-                              <td className="p-4 text-slate-600 text-sm font-medium">{['轉出', '畢業', '放棄學籍'].includes(student.status) ? '-' : (student.originalClassSeat || '-')}</td>
                               <td className="p-4 text-slate-600">{student.gender}</td>
                               <td className="p-4">
                                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
@@ -1028,7 +1024,6 @@
                             <th className="p-4 font-semibold w-20 text-blue-700">座號</th>
                             <th className="p-4 font-semibold">學號</th>
                             <th className="p-4 font-semibold">姓名</th>
-                            <th className="p-4 font-semibold">原班座號</th>
                             <th className="p-4 font-semibold">狀態</th>
                             <th className="p-4 font-semibold text-slate-500">異動紀錄 (日期)</th>
                             <th className="p-4 font-semibold text-right">操作</th>
@@ -1041,7 +1036,6 @@
                               <td className="p-4 text-blue-700 font-bold text-lg">{student.seatNumber}</td>
                               <td className="p-4 text-slate-700 font-mono">{student.id || '無學號'}</td>
                               <td className="p-4 text-slate-800 font-medium">{student.name} {student.gender === '女' && <span className="text-pink-500">*</span>}</td>
-                              <td className="p-4 text-slate-600 text-sm font-medium">{student.originalClassSeat || '-'}</td>
                               <td className="p-4">
                                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                                   student.status === '在籍' ? 'bg-green-100 text-green-700' : 
@@ -1144,7 +1138,6 @@
                           </div>
                         )}
 
-                        {/* 🌟 加上異動生效日期 */}
                         <div className={`space-y-1 ${!editingStudent ? '' : 'col-span-2'}`}>
                           <label className="text-sm font-medium text-slate-700">異動生效日期</label>
                           <input type="date" name="transferDate" value={formData.transferDate || ''} onChange={handleInputChange} className="w-full border rounded-lg px-3 py-2 bg-slate-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-slate-700" />
@@ -1216,7 +1209,7 @@
                        </div>
                        <div className="flex items-start gap-3 p-4 bg-indigo-50 border border-indigo-100 rounded-xl mt-4 cursor-pointer" onClick={() => setNewSemesterData({...newSemesterData, copyOldData: !newSemesterData.copyOldData})}>
                           <input type="checkbox" checked={newSemesterData.copyOldData} readOnly className="mt-1 w-4 h-4 text-indigo-600" />
-                          <div><p className="font-bold text-indigo-900 text-sm">自動匯入舊資料並標記【原班座號】</p></div>
+                          <div><p className="font-bold text-indigo-900 text-sm">自動匯入舊資料</p></div>
                        </div>
                        <div className="pt-4 flex justify-end gap-3 border-t mt-6">
                         <button type="button" onClick={() => { setIsNewSemesterModalOpen(false); }} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium">取消</button>
