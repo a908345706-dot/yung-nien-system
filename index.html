@@ -11,11 +11,9 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- 載入 Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
   
-  <!-- 🌟 支援框線與字體的專業 Excel 產出引擎 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body class="bg-slate-50">
@@ -261,8 +259,8 @@
               if (isStatusChanged) {
                 if (['轉出', '休學', '放棄學籍', '畢業'].includes(formData.status)) {
                   logMsg += `【${formData.status}通知】學生 ${formData.name} (${newClass}) 已辦理${formData.status}。 `;
-                } else if (formData.status === '轉班' && !isClassChanged) {
-                  logMsg += `【狀態變更】學生 ${formData.name} 狀態已標記為「轉班」，後續請記得更新其班級。 `;
+                } else if (['轉班', '轉入'].includes(formData.status) && !isClassChanged) {
+                  logMsg += `【狀態變更】學生 ${formData.name} 狀態已標記為「${formData.status}」，後續請記得確認其班級。 `;
                 } else if (!isClassChanged) {
                   logMsg += `【狀態變更】學生 ${formData.name} 狀態改為「${formData.status}」。 `;
                 }
@@ -303,7 +301,7 @@
         setFormData({ 
           id: '', name: '', seatNumber: '1', gender: '男', 
           grade: manageFilterGrade, className: manageFilterClass, 
-          status: '轉班', 
+          status: '轉入', // 🌟 修改：預設狀態改為「轉入」
           transferDate: new Date().toISOString().split('T')[0],
           originalClassSeat: '' 
         }); 
@@ -621,7 +619,8 @@
       };
 
       const exportStudentCountsToExcel = () => {
-        const activeSchoolStudents = students.filter(s => s.semester === activeSemester && ['在籍', '轉班'].includes(s.status));
+        // 🌟 確保只計算 在籍、轉班、轉入 的學生
+        const activeSchoolStudents = students.filter(s => s.semester === activeSemester && ['在籍', '轉班', '轉入'].includes(s.status));
         if (activeSchoolStudents.length === 0) return showAlert(`目前 ${activeSemester} 沒有任何學生資料`);
 
         const grades = ['國一', '國二', '國三', '高一', '高二', '高三'];
@@ -629,7 +628,6 @@
 
         let aoa = [];
         aoa.push([`永年中學 ${activeSemester}學期 班級人數統計表`, '', '', '', '']);
-        // 🌟 新增：加入製表日期於 Excel 內容中
         aoa.push([`製表日期：${getRocDateString()}`, '', '', '', '']);
         aoa.push(['年級', '班級', '總人數', '男生', '女生']);
 
@@ -674,7 +672,6 @@
         const borderStyle = { style: "thin", color: { rgb: "000000" } };
         const baseStyle = { font: { name: "標楷體", sz: 12 }, alignment: { vertical: "center", horizontal: "center" } };
         const titleStyle = { ...baseStyle, font: { name: "標楷體", sz: 16, bold: true }, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
-        // 🌟 新增：日期列專屬樣式 (靠右對齊、無框線、字體稍小)
         const dateStyle = { font: { name: "標楷體", sz: 10 }, alignment: { vertical: "center", horizontal: "right" } };
         const headerStyle = { ...baseStyle, font: { name: "標楷體", sz: 12, bold: true }, fill: { fgColor: { rgb: "E2EFDA" } }, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
         const cellStyle = { ...baseStyle, border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle } };
@@ -685,7 +682,6 @@
         
         let merges = [];
         merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } });
-        // 🌟 合併日期列
         merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: 4 } });
 
         for (let R = 0; R < aoa.length; R++) {
@@ -698,9 +694,9 @@
                 if (R === 0) {
                     ws[cellRef].s = titleStyle;
                 } else if (R === 1) { 
-                    ws[cellRef].s = dateStyle; // 日期列套用樣式
+                    ws[cellRef].s = dateStyle; 
                 } else if (R === 2) { 
-                    ws[cellRef].s = headerStyle; // 表頭列 (往下移)
+                    ws[cellRef].s = headerStyle; 
                 } else if (String(rowData).includes('總計')) {
                     if (String(rowData).includes('全校') || String(rowData).includes('部')) {
                        ws[cellRef].s = totalStyle;
@@ -722,7 +718,6 @@
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, '人數統計表');
-        // 🌟 修改：所有匯出的檔案名稱自動加上日期
         XLSX.writeFile(wb, `${activeSemester}_永年中學_班級人數統計表_${getRocDateString()}.xlsx`);
       };
 
@@ -738,8 +733,8 @@
         </React.Fragment>
       );
 
-      // 🌟 計算全校與各部實際人數
-      const activeSchoolStudents = currentSemesterStudents.filter(s => ['在籍', '轉班'].includes(s.status));
+      // 🌟 計算全校與各部實際人數 (確保加入轉入狀態)
+      const activeSchoolStudents = currentSemesterStudents.filter(s => ['在籍', '轉班', '轉入'].includes(s.status));
       
       const schoolTotal = activeSchoolStudents.length;
       const schoolMale = activeSchoolStudents.filter(s => s.gender === '男').length;
@@ -755,12 +750,12 @@
       const shMale = shStudents.filter(s => s.gender === '男').length;
       const shFemale = shStudents.filter(s => s.gender === '女').length;
 
-      const activeClassListStudents = currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass && ['在籍', '轉班'].includes(s.status));
+      const activeClassListStudents = currentSemesterStudents.filter(s => s.grade === filterGrade && s.className === filterClass && ['在籍', '轉班', '轉入'].includes(s.status));
       const classListTotal = activeClassListStudents.length;
       const classListMale = activeClassListStudents.filter(s => s.gender === '男').length;
       const classListFemale = activeClassListStudents.filter(s => s.gender === '女').length;
 
-      const activeManageListStudents = currentSemesterStudents.filter(s => s.grade === manageFilterGrade && s.className === manageFilterClass && ['在籍', '轉班'].includes(s.status));
+      const activeManageListStudents = currentSemesterStudents.filter(s => s.grade === manageFilterGrade && s.className === manageFilterClass && ['在籍', '轉班', '轉入'].includes(s.status));
       const manageListTotal = activeManageListStudents.length;
       const manageListMale = activeManageListStudents.filter(s => s.gender === '男').length;
       const manageListFemale = activeManageListStudents.filter(s => s.gender === '女').length;
@@ -978,6 +973,7 @@
                               <td className="p-4">
                                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                                   student.status === '在籍' ? 'bg-green-100 text-green-700' : 
+                                  student.status === '轉入' ? 'bg-purple-100 text-purple-700' : 
                                   student.status === '休學' ? 'bg-amber-100 text-amber-700' : 
                                   student.status === '轉班' ? 'bg-blue-100 text-blue-700' : 
                                   student.status === '放棄學籍' ? 'bg-slate-200 text-slate-700' : 'bg-red-100 text-red-700'
@@ -1080,6 +1076,7 @@
                               <td className="p-4">
                                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                                   student.status === '在籍' ? 'bg-green-100 text-green-700' : 
+                                  student.status === '轉入' ? 'bg-purple-100 text-purple-700' : 
                                   student.status === '轉班' ? 'bg-blue-100 text-blue-700' : 
                                   student.status === '休學' ? 'bg-amber-100 text-amber-700' : 
                                   student.status === '放棄學籍' ? 'bg-slate-200 text-slate-700' : 'bg-red-100 text-red-700'
@@ -1170,7 +1167,8 @@
                             <label className="text-sm font-medium text-slate-700">學籍狀態</label>
                             <select name="status" value={formData.status} onChange={handleInputChange} className="w-full border rounded-lg px-3 py-2 bg-slate-50 outline-none font-bold text-blue-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
                                <option value="在籍">在籍 (一般)</option>
-                               <option value="轉班">轉班</option>
+                               <option value="轉入">轉入 (外校轉進)</option>
+                               <option value="轉班">轉班 (校內異動)</option>
                                <option value="轉出">轉出</option>
                                <option value="休學">休學</option>
                                <option value="放棄學籍">放棄學籍</option>
