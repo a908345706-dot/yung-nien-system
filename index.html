@@ -11,9 +11,11 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+  <!-- 載入 Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
   
+  <!-- 🌟 支援框線與字體的專業 Excel 產出引擎 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body class="bg-slate-50">
@@ -276,6 +278,7 @@
             }).catch(err => showAlert("更新失敗：" + err.message));
           } else {
             db.collection("students").add({ ...formData, semester: activeSemester }).then((docRef) => {
+              // 🌟 新增轉入生的訊息格式
               addLog(`【新增學生】${formData.name} 加入 ${formData.grade}${formData.className}班 (座號 ${formData.seatNumber})，狀態為「${formData.status}」${formData.transferDate ? ` (生效日: ${formData.transferDate})` : ''}`, activeSemester, auth.department, 'single');
               setIsModalOpen(false);
               triggerUndoableAction('ADD', docRef.id, null, `新增了學生 ${formData.name}`);
@@ -301,7 +304,7 @@
         setFormData({ 
           id: '', name: '', seatNumber: '1', gender: '男', 
           grade: manageFilterGrade, className: manageFilterClass, 
-          status: '轉入', // 🌟 修改：預設狀態改為「轉入」
+          status: '轉入', // 🌟 新增學生預設狀態改為「轉入」
           transferDate: new Date().toISOString().split('T')[0],
           originalClassSeat: '' 
         }); 
@@ -439,6 +442,12 @@
         return `${today.getFullYear() - 1911}.${today.getMonth() + 1}.${today.getDate()}`;
       };
 
+      // 🌟 獲取該清單中實際的最大座號 (用於自動延伸 Excel 報表)
+      const getValidMaxSeat = (studentArray) => {
+        const seats = studentArray.map(s => getSeatNum(s.seatNumber)).filter(n => n !== 999 && !isNaN(n));
+        return seats.length > 0 ? Math.max(...seats) : 0;
+      };
+
       const generateGradeAOA = (targetGrade) => {
         const classOrder = ['忠', '孝', '仁', '愛', '信', '義', '和', '平', '未編班'];
         const gradeStudents = students.filter(s => s.semester === activeSemester && s.grade === targetGrade);
@@ -450,7 +459,10 @@
           return idxA - idxB;
         });
 
-        const maxRows = 45; 
+        // 🌟 動態設定最大列數：最少45格，若班級有座號>45，則自動向下延伸！
+        const maxSeat = getValidMaxSeat(gradeStudents);
+        const maxRows = Math.max(45, maxSeat); 
+
         let aoa = [];
 
         let titleRow = [];
@@ -530,7 +542,10 @@
         const classStudents = students.filter(s => s.semester === activeSemester && s.grade === targetGrade && s.className === targetClass);
         if (classStudents.length === 0) return null;
 
-        const maxRows = 45; 
+        // 🌟 動態設定最大列數：最少45格，若班級有座號>45，則自動向下延伸！
+        const maxSeat = getValidMaxSeat(classStudents);
+        const maxRows = Math.max(45, maxSeat); 
+
         let aoa = [];
         aoa.push([`${targetGrade}${targetClass}`, '', '', '', '']);
         aoa.push(['編號', '學號', '姓名', '平時', '段考']);
@@ -619,7 +634,6 @@
       };
 
       const exportStudentCountsToExcel = () => {
-        // 🌟 確保只計算 在籍、轉班、轉入 的學生
         const activeSchoolStudents = students.filter(s => s.semester === activeSemester && ['在籍', '轉班', '轉入'].includes(s.status));
         if (activeSchoolStudents.length === 0) return showAlert(`目前 ${activeSemester} 沒有任何學生資料`);
 
@@ -733,7 +747,6 @@
         </React.Fragment>
       );
 
-      // 🌟 計算全校與各部實際人數 (確保加入轉入狀態)
       const activeSchoolStudents = currentSemesterStudents.filter(s => ['在籍', '轉班', '轉入'].includes(s.status));
       
       const schoolTotal = activeSchoolStudents.length;
@@ -762,7 +775,6 @@
 
       return (
         <React.Fragment>
-          {/* 🌟 復原(Undo)浮動視窗 */}
           {undoAction && (
             <div className="fixed bottom-6 right-6 bg-slate-800 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-4 z-[200] animate-in slide-in-from-bottom-5">
                <div>
