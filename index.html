@@ -914,7 +914,7 @@ export default function App() {
   };
 
   const GradeOptions = () => (
-    <React.Fragment>
+    <>
       <optgroup label="國中部">
         <option value="國一">國一</option>
         <option value="國二">國二</option>
@@ -925,11 +925,11 @@ export default function App() {
         <option value="高二">高二</option>
         <option value="高三">高三</option>
       </optgroup>
-    </React.Fragment>
+    </>
   );
 
   const ClassOptions = () => (
-    <React.Fragment>
+    <>
       <option value="忠">忠 班</option>
       <option value="孝">孝 班</option>
       <option value="仁">仁 班</option>
@@ -939,7 +939,7 @@ export default function App() {
       <option value="和">和 班</option>
       <option value="平">平 班</option>
       <option value="未編班">未編班</option>
-    </React.Fragment>
+    </>
   );
 
   const activeSchoolStudents = currentSemesterStudents.filter(s => ['在籍', '轉班', '轉入'].includes(s.status));
