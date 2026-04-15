@@ -77,8 +77,13 @@
       const [dialog, setDialog] = useState({ isOpen: false, type: 'alert', title: '', message: '', onConfirm: null });
       const [undoAction, setUndoAction] = useState(null); 
 
-      const [semesters, setSemesters] = useState(['114-1', '113-2']);
-      const [activeSemester, setActiveSemester] = useState('114-1');
+      // 🌟 修正：將學期狀態綁定本地儲存，避免重整後幽靈學期跑出來
+      const [semesters, setSemesters] = useState(() => {
+        const saved = localStorage.getItem('yungNienSemesters');
+        return saved ? JSON.parse(saved) : ['114-1', '113-2'];
+      });
+      const [activeSemester, setActiveSemester] = useState(semesters[0] || '114-1');
+      
       const [activeTab, setActiveTab] = useState('classList');
       const [students, setStudents] = useState([]);
       const [logs, setLogs] = useState([]);
@@ -104,7 +109,7 @@
       const showConfirm = (message, onConfirm, title = '系統確認') => setDialog({ isOpen: true, type: 'confirm', title, message, onConfirm });
       const closeDialog = () => setDialog({ ...dialog, isOpen: false });
 
-      // === 監聽 Firebase ===
+      // === 監聽 Firebase 與本地狀態儲存 ===
       useEffect(() => {
         const unsubscribeAccounts = db.collection("system").doc("accounts").onSnapshot((doc) => {
           if (doc.exists) {
@@ -136,13 +141,20 @@
         return () => { unsubscribeStudents(); unsubscribeLogs(); };
       }, [auth.loggedIn]);
 
+      // 🌟 修正：確保存下真實存在的學期
       useEffect(() => {
         if (students.length > 0) {
           const dbSemesters = [...new Set(students.map(s => s.semester))];
-          const combined = [...new Set([...dbSemesters, ...semesters])].sort().reverse();
-          setSemesters(combined);
+          setSemesters(prev => {
+            const combined = [...new Set([...dbSemesters, ...prev])].sort().reverse();
+            return combined;
+          });
         }
       }, [students]);
+
+      useEffect(() => {
+        localStorage.setItem('yungNienSemesters', JSON.stringify(semesters));
+      }, [semesters]);
 
       const currentSemesterStudents = students.filter(s => s.semester === activeSemester);
       const filteredLogs = logs.filter(l => l.semester === activeSemester).slice(0, 20);
@@ -391,15 +403,27 @@
         }, '重新命名確認');
       };
 
+      // 🌟 修正：徹底解決「刪除學期後覺得資料還在」的錯覺問題
       const handleDeleteSemester = () => {
         if (semesters.length <= 1) return showAlert('無法刪除！系統至少需要保留一個學期。');
 
         showConfirm(`⚠️ 嚴重警告 ⚠️\n\n確定要徹底刪除【${activeSemester}】學期嗎？\n這將會同步清除該學期底下的「所有學生名單」與「通知紀錄」，且 刪除後無法復原！`, async () => {
           try {
-            const studentsToDelete = students.filter(s => s.semester === activeSemester);
-            const logsToDelete = logs.filter(l => l.semester === activeSemester);
+            const semesterToDelete = activeSemester;
+            const studentsToDelete = students.filter(s => s.semester === semesterToDelete);
+            const logsToDelete = logs.filter(l => l.semester === semesterToDelete);
             const allDocs = [...studentsToDelete.map(s => ({ ref: db.collection("students").doc(s.docId) })), ...logsToDelete.map(l => ({ ref: db.collection("logs").doc(l.docId) }))];
 
+            // 1. 先在前端畫面立即清空資料，提供最快的視覺回饋
+            setStudents(prev => prev.filter(s => s.semester !== semesterToDelete));
+            setLogs(prev => prev.filter(l => l.semester !== semesterToDelete));
+
+            // 2. 更新學期選單並自動切換到下一個學期
+            const newSemesters = semesters.filter(sem => sem !== semesterToDelete);
+            setSemesters(newSemesters);
+            setActiveSemester(newSemesters[0]);
+
+            // 3. 背景執行 Firebase 雲端批次刪除
             for (let i = 0; i < allDocs.length; i += 500) {
                 const chunk = allDocs.slice(i, i + 500);
                 const batch = db.batch();
@@ -407,10 +431,7 @@
                 await batch.commit();
             }
 
-            const newSemesters = semesters.filter(sem => sem !== activeSemester);
-            setSemesters(newSemesters);
-            setActiveSemester(newSemesters[0]);
-            showAlert(`已成功徹底刪除學期「${activeSemester}」與其關聯的 ${allDocs.length} 筆資料。`, '刪除成功');
+            showAlert(`已成功徹底清除「${semesterToDelete}」的所有資料（共 ${allDocs.length} 筆）。\n\n系統已自動為您切換至「${newSemesters[0]}」學期，您現在看到的是新學期的資料表。`, '刪除成功');
           } catch (err) {
             showAlert('刪除學期失敗：' + err.message);
           }
@@ -544,8 +565,8 @@
         const titleStyle = { ...baseStyle, font: { name: "標楷體", sz: 14, bold: true }, border: borders };
 
         ws['!cols'] = [
-          { wch: 6 }, { wch: 11 }, { wch: 13 }, { wch: 6 }, { wch: 6 }, { wch: 2 },
-          { wch: 6 }, { wch: 11 }, { wch: 13 }, { wch: 6 }, { wch: 6 }, { wch: 2 }
+          { wch: 5 }, { wch: 9 }, { wch: 10 }, { wch: 6 }, { wch: 6 }, { wch: 2 },
+          { wch: 5 }, { wch: 9 }, { wch: 10 }, { wch: 6 }, { wch: 6 }, { wch: 2 }
         ];
 
         ws['!merges'] = [
@@ -928,8 +949,8 @@
                 </div>
                 <div className="p-6 text-slate-700 font-medium whitespace-pre-wrap leading-relaxed">{dialog.message}</div>
                 <div className="px-6 py-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-200">
-                  {dialog.type === 'confirm' && <button onClick={closeDialog} className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-bold">取消</button>}
-                  <button onClick={() => { if (dialog.onConfirm) dialog.onConfirm(); closeDialog(); }} className={`px-4 py-2 text-white rounded-lg font-bold shadow-md ${dialog.type === 'confirm' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'}`}>確定</button>
+                  {dialog.type === 'confirm' && <button onClick={closeDialog} className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-bold transition-colors">取消</button>}
+                  <button onClick={() => { if (dialog.onConfirm) dialog.onConfirm(); closeDialog(); }} className={`px-4 py-2 text-white rounded-lg font-bold shadow-md transition-colors ${dialog.type === 'confirm' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'}`}>確定</button>
                 </div>
               </div>
             </div>
