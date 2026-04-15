@@ -7,7 +7,7 @@
   
   <!-- 載入 Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- 🌟 載入 FontAwesome 穩定圖示庫 (解決白畫面問題) -->
+  <!-- 🌟 載入 FontAwesome 穩定圖示庫 -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
   <!-- 載入 React & ReactDOM -->
@@ -20,7 +20,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
   
-  <!-- 🌟 載入專業 Excel (.xlsx) 樣式產出套件 (徹底解決亂碼與格式問題) -->
+  <!-- 🌟 載入專業 Excel (.xlsx) 樣式產出套件 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 
   <style>
@@ -77,7 +77,7 @@
       const [dialog, setDialog] = useState({ isOpen: false, type: 'alert', title: '', message: '', onConfirm: null });
       const [undoAction, setUndoAction] = useState(null); 
 
-      // 🌟 修正：將學期狀態綁定本地儲存，避免重整後幽靈學期跑出來
+      // 學期狀態綁定本地儲存
       const [semesters, setSemesters] = useState(() => {
         const saved = localStorage.getItem('yungNienSemesters');
         return saved ? JSON.parse(saved) : ['114-1', '113-2'];
@@ -109,7 +109,7 @@
       const showConfirm = (message, onConfirm, title = '系統確認') => setDialog({ isOpen: true, type: 'confirm', title, message, onConfirm });
       const closeDialog = () => setDialog({ ...dialog, isOpen: false });
 
-      // === 監聽 Firebase 與本地狀態儲存 ===
+      // === 監聽 Firebase ===
       useEffect(() => {
         const unsubscribeAccounts = db.collection("system").doc("accounts").onSnapshot((doc) => {
           if (doc.exists) {
@@ -141,7 +141,7 @@
         return () => { unsubscribeStudents(); unsubscribeLogs(); };
       }, [auth.loggedIn]);
 
-      // 🌟 修正：確保存下真實存在的學期
+      // 確保存下真實存在的學期
       useEffect(() => {
         if (students.length > 0) {
           const dbSemesters = [...new Set(students.map(s => s.semester))];
@@ -371,6 +371,7 @@
         showAlert(`新學期「${newSem}」建立完成！`, '建立成功');
       };
 
+      // 🌟 修正：直接向雲端查詢，徹底杜絕同步時間差造成的漏改
       const handleUpdateSemester = async (e) => {
         e.preventDefault();
         const newSem = editSemesterName.trim();
@@ -381,38 +382,42 @@
         showConfirm(`確定要將學期「${activeSemester}」重新命名為「${newSem}」嗎？\n系統會自動同步更新該學期底下的所有學生與通知紀錄！`, async () => {
           try {
             setIsEditSemesterModalOpen(false);
-            const studentsToUpdate = students.filter(s => s.semester === activeSemester);
-            const logsToUpdate = logs.filter(l => l.semester === activeSemester);
-            const allDocs = [...studentsToUpdate.map(s => ({ ref: db.collection("students").doc(s.docId) })), ...logsToUpdate.map(l => ({ ref: db.collection("logs").doc(l.docId) }))];
+            const semesterToUpdate = activeSemester;
             
-            for (let i = 0; i < allDocs.length; i += 500) {
-                const chunk = allDocs.slice(i, i + 500);
+            // 1. 強制從雲端撈取所有符合該學期的資料 (防止本地未更新完畢)
+            const studentsSnapshot = await db.collection("students").where("semester", "==", semesterToUpdate).get();
+            const logsSnapshot = await db.collection("logs").where("semester", "==", semesterToUpdate).get();
+            
+            const allRefs = [];
+            studentsSnapshot.forEach(doc => allRefs.push(doc.ref));
+            logsSnapshot.forEach(doc => allRefs.push(doc.ref));
+            
+            // 2. 批次更新
+            for (let i = 0; i < allRefs.length; i += 500) {
+                const chunk = allRefs.slice(i, i + 500);
                 const batch = db.batch();
-                chunk.forEach(item => batch.update(item.ref, { semester: newSem }));
+                chunk.forEach(ref => batch.update(ref, { semester: newSem }));
                 await batch.commit();
             }
 
-            db.collection("logs").add({ semester: newSem, timestamp: new Date().toLocaleString(), message: `【系統紀錄】管理員將學期名稱由「${activeSemester}」更改為「${newSem}」。`, department: '系統', timeMs: Date.now(), type: 'info' });
+            db.collection("logs").add({ semester: newSem, timestamp: new Date().toLocaleString(), message: `【系統紀錄】管理員將學期名稱由「${semesterToUpdate}」更改為「${newSem}」。`, department: '系統', timeMs: Date.now(), type: 'info' });
 
-            setSemesters(prev => prev.map(s => s === activeSemester ? newSem : s));
+            setSemesters(prev => prev.map(s => s === semesterToUpdate ? newSem : s));
             setActiveSemester(newSem);
-            showAlert(`成功將學期重新命名為「${newSem}」！已同步 ${allDocs.length} 筆資料。`, '修改成功');
+            showAlert(`成功將學期重新命名為「${newSem}」！已同步 ${allRefs.length} 筆資料。`, '修改成功');
           } catch(err) {
             showAlert('學期重新命名失敗：' + err.message);
           }
         }, '重新命名確認');
       };
 
-      // 🌟 修正：徹底解決「刪除學期後覺得資料還在」的錯覺問題
+      // 🌟 修正：直接向雲端查詢，徹底解決「幽靈資料刪不乾淨」的狀況
       const handleDeleteSemester = () => {
         if (semesters.length <= 1) return showAlert('無法刪除！系統至少需要保留一個學期。');
 
         showConfirm(`⚠️ 嚴重警告 ⚠️\n\n確定要徹底刪除【${activeSemester}】學期嗎？\n這將會同步清除該學期底下的「所有學生名單」與「通知紀錄」，且 刪除後無法復原！`, async () => {
           try {
             const semesterToDelete = activeSemester;
-            const studentsToDelete = students.filter(s => s.semester === semesterToDelete);
-            const logsToDelete = logs.filter(l => l.semester === semesterToDelete);
-            const allDocs = [...studentsToDelete.map(s => ({ ref: db.collection("students").doc(s.docId) })), ...logsToDelete.map(l => ({ ref: db.collection("logs").doc(l.docId) }))];
 
             // 1. 先在前端畫面立即清空資料，提供最快的視覺回饋
             setStudents(prev => prev.filter(s => s.semester !== semesterToDelete));
@@ -423,22 +428,30 @@
             setSemesters(newSemesters);
             setActiveSemester(newSemesters[0]);
 
-            // 3. 背景執行 Firebase 雲端批次刪除
-            for (let i = 0; i < allDocs.length; i += 500) {
-                const chunk = allDocs.slice(i, i + 500);
+            // 3. 🌟 強制從雲端撈取所有該學期資料，避免本地狀態不全導致漏刪
+            const studentsSnapshot = await db.collection("students").where("semester", "==", semesterToDelete).get();
+            const logsSnapshot = await db.collection("logs").where("semester", "==", semesterToDelete).get();
+
+            const allRefs = [];
+            studentsSnapshot.forEach(doc => allRefs.push(doc.ref));
+            logsSnapshot.forEach(doc => allRefs.push(doc.ref));
+
+            // 4. 背景執行 Firebase 雲端批次刪除
+            for (let i = 0; i < allRefs.length; i += 500) {
+                const chunk = allRefs.slice(i, i + 500);
                 const batch = db.batch();
-                chunk.forEach(item => batch.delete(item.ref));
+                chunk.forEach(ref => batch.delete(ref));
                 await batch.commit();
             }
 
-            showAlert(`已成功徹底清除「${semesterToDelete}」的所有資料（共 ${allDocs.length} 筆）。\n\n系統已自動為您切換至「${newSemesters[0]}」學期，您現在看到的是新學期的資料表。`, '刪除成功');
+            showAlert(`已成功徹底清除「${semesterToDelete}」的所有資料（共 ${allRefs.length} 筆）。\n\n系統已自動為您切換至「${newSemesters[0]}」學期，您現在看到的是新學期的資料表。`, '刪除成功');
           } catch (err) {
             showAlert('刪除學期失敗：' + err.message);
           }
         }, '🗑️ 刪除學期確認');
       };
 
-      // === 🌟 Excel (.xlsx) 檔案讀取上傳與解析 ===
+      // === Excel (.xlsx) 檔案讀取上傳與解析 ===
       const handleFileUpload = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -446,7 +459,6 @@
         const reader = new FileReader();
         reader.onload = async (event) => {
           try {
-            // 使用 ArrayBuffer 才能正確解析 Excel 檔案
             const data = new Uint8Array(event.target.result);
             const XLSX_Instance = window.XLSX;
             if (!XLSX_Instance) return showAlert('Excel 套件載入中，請稍後。');
@@ -459,11 +471,10 @@
             const updatedDocsForUndo = [];
             let validSheetCount = 0;
 
-            // 遍歷 Excel 所有分頁
             workbook.SheetNames.forEach(sheetName => {
               const worksheet = workbook.Sheets[sheetName];
               const rows = XLSX_Instance.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
-              if (rows.length < 3) return; // 略過資料太少的分頁
+              if (rows.length < 3) return;
 
               const classHeaders = [];
               rows[0].forEach((cell, index) => {
@@ -529,12 +540,11 @@
           setIsImportModalOpen(false);
           e.target.value = null; 
         };
-        // 使用 ArrayBuffer 讀取二進位資料
         reader.readAsArrayBuffer(file);
       };
 
       // ==============================================================
-      // 🌟 專業 Excel (.xlsx) 產生引擎 (保證有框線、標楷體、完美置中)
+      // 🌟 專業 Excel (.xlsx) 產生引擎
       // ==============================================================
       const getRocDateString = () => {
         const today = new Date();
@@ -546,7 +556,6 @@
         return seats.length > 0 ? Math.max(...seats) : 0;
       };
 
-      // 下載 Excel 範例檔
       const downloadSampleExcel = () => {
         const XLSX_Instance = window.XLSX;
         if (!XLSX_Instance) return showAlert('系統尚未準備好下載套件，請稍後。');
@@ -589,7 +598,6 @@
         XLSX_Instance.writeFile(wb, "批次匯入名單範例.xlsx");
       };
 
-      // 共用樣式設定
       const applyExcelStyle = (ws, totalCols, totalRows) => {
         const XLSX_Instance = window.XLSX;
         if (!XLSX_Instance) return;
@@ -597,10 +605,10 @@
         const borderThin = { style: "thin", color: { rgb: "000000" } };
         const borders = { top: borderThin, bottom: borderThin, left: borderThin, right: borderThin };
         
-        // 定義不同的樣式
         const titleStyle = { font: { name: "標楷體", sz: 14, bold: true }, alignment: { vertical: "center", horizontal: "center" }, border: borders };
         const headerStyle = { font: { name: "標楷體", sz: 12, bold: true }, alignment: { vertical: "center", horizontal: "center" }, border: borders };
         const cellStyle = { font: { name: "標楷體", sz: 12 }, alignment: { vertical: "center", horizontal: "center" }, border: borders };
+        const totalStyle = { font: { name: "標楷體", sz: 12, bold: true }, alignment: { vertical: "center", horizontal: "center" }, border: borders };
         const noBorderLeft = { font: { name: "標楷體", sz: 12 }, alignment: { vertical: "center", horizontal: "left" } };
         const noBorderRight = { font: { name: "標楷體", sz: 10 }, alignment: { vertical: "center", horizontal: "right" } };
 
@@ -609,10 +617,8 @@
                 const cellRef = XLSX_Instance.utils.encode_cell({ c: C, r: R });
                 if (!ws[cellRef]) ws[cellRef] = { v: "", t: "s" };
                 
-                // 跳過並排總表的空白分隔欄
                 if (totalCols > 5 && (C + 1) % 6 === 0) continue; 
 
-                // 套用樣式邏輯
                 if (R === 0) {
                     ws[cellRef].s = titleStyle;
                 } else if (R === 1) {
@@ -621,6 +627,8 @@
                     ws[cellRef].s = (C % 6 >= 3 || C >= 3 && totalCols <= 5) ? noBorderRight : noBorderLeft;
                 } else if (R === totalRows - 1) {
                     ws[cellRef].s = noBorderLeft;
+                } else if (R === totalRows - 3) {
+                    ws[cellRef].s = totalStyle;
                 } else {
                     ws[cellRef].s = cellStyle;
                 }
@@ -628,7 +636,6 @@
         }
       };
 
-      // 1. 匯出【全年級並排總表】 Excel
       const exportGradeToExcel = (targetGrade) => {
         const XLSX_Instance = window.XLSX;
         if (!XLSX_Instance) return showAlert('系統尚未準備好下載套件，請稍等一秒再試。');
@@ -646,7 +653,6 @@
         const maxRows = Math.max(45, maxSeat); 
         let aoa = [];
 
-        // 構建標題與表頭
         let titleRow = [];
         let headerRow = [];
         let cols = [];
@@ -659,15 +665,15 @@
             
             const startCol = i * 6;
             merges.push({ s: { r: 0, c: startCol }, e: { r: 0, c: startCol + 4 } }); 
-            merges.push({ s: { r: maxRows + 2, c: startCol }, e: { r: maxRows + 2, c: startCol + 2 } }); 
-            merges.push({ s: { r: maxRows + 2, c: startCol + 3 }, e: { r: maxRows + 2, c: startCol + 4 } }); 
-            merges.push({ s: { r: maxRows + 3, c: startCol }, e: { r: maxRows + 3, c: startCol + 1 } }); 
-            merges.push({ s: { r: maxRows + 3, c: startCol + 2 }, e: { r: maxRows + 3, c: startCol + 4 } }); 
+            merges.push({ s: { r: maxRows + 2, c: startCol }, e: { r: maxRows + 2, c: startCol + 4 } }); 
+            merges.push({ s: { r: maxRows + 3, c: startCol }, e: { r: maxRows + 3, c: startCol + 2 } }); 
+            merges.push({ s: { r: maxRows + 3, c: startCol + 3 }, e: { r: maxRows + 3, c: startCol + 4 } }); 
+            merges.push({ s: { r: maxRows + 4, c: startCol }, e: { r: maxRows + 4, c: startCol + 1 } }); 
+            merges.push({ s: { r: maxRows + 4, c: startCol + 2 }, e: { r: maxRows + 4, c: startCol + 4 } }); 
         });
         aoa.push(titleRow);
         aoa.push(headerRow);
 
-        // 填入名單
         for (let seat = 1; seat <= maxRows; seat++) {
           let rowData = [];
           uniqueClasses.forEach(cls => {
@@ -681,6 +687,13 @@
           aoa.push(rowData);
         }
 
+        let totalRow = [];
+        uniqueClasses.forEach(cls => {
+          const validCount = gradeStudents.filter(s => s.className === cls && !['轉出', '休學', '畢業', '放棄學籍'].includes(s.status)).length;
+          totalRow.push(`總人數：${validCount} 人`, '', '', '', '', '');
+        });
+        aoa.push(totalRow);
+
         let footerRow1 = [];
         let footerRow2 = [];
         uniqueClasses.forEach(cls => { 
@@ -690,7 +703,6 @@
         aoa.push(footerRow1);
         aoa.push(footerRow2);
 
-        // 產出
         const ws = XLSX_Instance.utils.aoa_to_sheet(aoa);
         ws['!cols'] = cols;
         ws['!merges'] = merges;
@@ -701,7 +713,6 @@
         XLSX_Instance.writeFile(wb, `${activeSemester}_${targetGrade}全年級_並排總表.xlsx`);
       };
 
-      // 2. 匯出【單班名單】 Excel
       const exportClassToExcel = (targetGrade, targetClass) => {
         const XLSX_Instance = window.XLSX;
         if (!XLSX_Instance) return showAlert('系統尚未準備好下載套件，請稍等一秒再試。');
@@ -725,6 +736,9 @@
           }
         }
         
+        const validCount = classStudents.filter(s => !['轉出', '休學', '畢業', '放棄學籍'].includes(s.status)).length;
+        aoa.push([`總人數：${validCount} 人`, '', '', '', '']);
+
         aoa.push(['*代表女生', '', '', `${getRocDateString()}製`, '']);
         aoa.push(['科目：', '', '教師：', '', '']);
 
@@ -732,6 +746,7 @@
         ws['!cols'] = [{ wch: 5 }, { wch: 9 }, { wch: 10 }, { wch: 6 }, { wch: 6 }];
         ws['!merges'] = [
             { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
+            { s: { r: aoa.length - 3, c: 0 }, e: { r: aoa.length - 3, c: 4 } },
             { s: { r: aoa.length - 2, c: 0 }, e: { r: aoa.length - 2, c: 2 } },
             { s: { r: aoa.length - 2, c: 3 }, e: { r: aoa.length - 2, c: 4 } },
             { s: { r: aoa.length - 1, c: 0 }, e: { r: aoa.length - 1, c: 1 } },
@@ -744,7 +759,6 @@
         XLSX_Instance.writeFile(wb, `${activeSemester}_${targetGrade}${targetClass}名單.xlsx`);
       };
 
-      // 3. 匯出【全校總表】 Excel
       const exportWholeSchoolToExcel = () => {
         const XLSX_Instance = window.XLSX;
         if (!XLSX_Instance) return showAlert('系統尚未準備好下載套件，請稍等一秒再試。');
@@ -775,10 +789,11 @@
                 cols.push({ wch: 5 }, { wch: 9 }, { wch: 10 }, { wch: 6 }, { wch: 6 }, { wch: 2 });
                 const startCol = i * 6;
                 merges.push({ s: { r: 0, c: startCol }, e: { r: 0, c: startCol + 4 } }); 
-                merges.push({ s: { r: maxRows + 2, c: startCol }, e: { r: maxRows + 2, c: startCol + 2 } }); 
-                merges.push({ s: { r: maxRows + 2, c: startCol + 3 }, e: { r: maxRows + 2, c: startCol + 4 } }); 
-                merges.push({ s: { r: maxRows + 3, c: startCol }, e: { r: maxRows + 3, c: startCol + 1 } }); 
-                merges.push({ s: { r: maxRows + 3, c: startCol + 2 }, e: { r: maxRows + 3, c: startCol + 4 } }); 
+                merges.push({ s: { r: maxRows + 2, c: startCol }, e: { r: maxRows + 2, c: startCol + 4 } }); 
+                merges.push({ s: { r: maxRows + 3, c: startCol }, e: { r: maxRows + 3, c: startCol + 2 } }); 
+                merges.push({ s: { r: maxRows + 3, c: startCol + 3 }, e: { r: maxRows + 3, c: startCol + 4 } }); 
+                merges.push({ s: { r: maxRows + 4, c: startCol }, e: { r: maxRows + 4, c: startCol + 1 } }); 
+                merges.push({ s: { r: maxRows + 4, c: startCol + 2 }, e: { r: maxRows + 4, c: startCol + 4 } }); 
             });
             aoa.push(titleRow); aoa.push(headerRow);
 
@@ -794,6 +809,13 @@
               });
               aoa.push(rowData);
             }
+
+            let totalRow = [];
+            uniqueClasses.forEach(cls => {
+              const validCount = gradeStudents.filter(s => s.className === cls && !['轉出', '休學', '畢業', '放棄學籍'].includes(s.status)).length;
+              totalRow.push(`總人數：${validCount} 人`, '', '', '', '', '');
+            });
+            aoa.push(totalRow);
 
             let footerRow1 = []; let footerRow2 = [];
             uniqueClasses.forEach(cls => { 
@@ -812,7 +834,6 @@
         XLSX_Instance.writeFile(wb, `${activeSemester}_永年中學_全校並排分頁總表.xlsx`);
       };
 
-      // 4. 匯出【人數統計表】 Excel
       const exportStudentCountsToExcel = () => {
         const XLSX_Instance = window.XLSX;
         if (!XLSX_Instance) return showAlert('系統尚未準備好下載套件，請稍等一秒再試。');
@@ -1222,7 +1243,7 @@
                         </div>
                       </div>
                       
-                      {/* 🌟 匯出與管理操作列 (全 Excel 引擎) */}
+                      {/* 🌟 匯出與管理操作列 */}
                       <div className="flex flex-wrap justify-between items-center gap-4 pt-4 border-t border-slate-100">
                         <div className="flex flex-wrap gap-2">
                           <button onClick={exportWholeSchoolToExcel} className="bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-teal-700 shadow-sm transition-colors"><i className="fa-solid fa-file-excel"></i> 匯出全校總表</button>
